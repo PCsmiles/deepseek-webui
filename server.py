@@ -1233,8 +1233,10 @@ async def api_git(ws: str = ""):
         st, path = line[:2].strip() or "??", line[3:].strip().strip('"')
         files.append({"status": st, "path": path})
     _, log = await asyncio.to_thread(_git, ["log", "-1", "--format=%h %s"], str(p))
+    # 有没有"存档点"（没有任何提交的仓库不能还原——还原等于把文件全删了）
+    code_h, _ = await asyncio.to_thread(_git, ["rev-parse", "--verify", "HEAD"], str(p))
     return {"ok": True, "is_repo": True, "ws": str(p), "branch": branch.strip(),
-            "files": files, "head": log.strip()}
+            "files": files, "head": log.strip(), "has_commits": code_h == 0}
 
 
 @app.get("/api/git/diff")
@@ -1288,7 +1290,13 @@ async def api_git_action(request: Request):
             if code != 0:   # 新文件用 checkout 恢复不了，直接删
                 code, out = await asyncio.to_thread(_git, ["clean", "-f", "--", path], str(p))
             return {"ok": code == 0, "message": (out or "已还原").strip()[-200:]}
-        # 全部还原
+        # 全部还原 —— ⚠️ 没有提交过的仓库绝不能执行：那时所有文件都是"未跟踪"，
+        # clean -fd 会把它们全删掉（实测踩过）。必须先有存档点。
+        code_h, _ = await asyncio.to_thread(_git, ["rev-parse", "--verify", "HEAD"], str(p))
+        if code_h != 0:
+            return JSONResponse({"ok": False, "message":
+                "这个仓库还没有任何提交（没有存档点）。现在还原会把所有文件删掉，已阻止。"
+                "先点「提交全部」存一个存档点，之后再有改动就能一键回滚了。"}, status_code=400)
         await asyncio.to_thread(_git, ["checkout", "--", "."], str(p))
         code, out = await asyncio.to_thread(_git, ["clean", "-fd"], str(p))
         print(f"[git] 全部还原：{p}")
@@ -1297,7 +1305,15 @@ async def api_git_action(request: Request):
     if action == "commit":
         msg = str(body.get("message") or "").strip() or f"webui: 改动 {time.strftime('%m-%d %H:%M')}"
         await asyncio.to_thread(_git, ["add", "-A"], str(p))
-        code, out = await asyncio.to_thread(_git, ["commit", "-m", msg], str(p))
+        # 没配 git 身份时提交会直接失败（"please tell me who you are"），
+        # 所以没配就临时用本机用户名兜一个，不去动他的全局配置
+        code_n, _ = await asyncio.to_thread(_git, ["config", "user.name"], str(p))
+        extra: List[str] = []
+        if code_n != 0:
+            uname = os.environ.get("USERNAME") or os.environ.get("USER") or Path.home().name or "local"
+            extra = ["-c", f"user.name={uname}", "-c", f"user.email={uname}@localhost"]
+            print(f"[git] 仓库没配身份，临时用 {uname}@localhost 提交")
+        code, out = await asyncio.to_thread(_git, extra + ["commit", "-m", msg], str(p))
         return {"ok": code == 0, "message": out.strip()[-300:]}
 
     return JSONResponse({"ok": False, "message": f"不认识的动作：{action}"}, status_code=400)

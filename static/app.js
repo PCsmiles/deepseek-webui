@@ -1423,21 +1423,26 @@ async function refreshGit() {
     }
     gitFiles = j.files || [];
     nodes.gitHead.textContent = `${j.branch || '-'} · ${(j.head || '还没有提交').slice(0, 40)}`;
-    nodes.gitMsg.textContent = gitFiles.length ? `${gitFiles.length} 个文件改过` : '工作区是干净的';
+    // 没有任何提交时不要提供"全部还原"（会删光文件），并明确引导先提交
+    nodes.gitMsg.textContent = gitFiles.length
+      ? (j.has_commits ? `${gitFiles.length} 个文件改过`
+        : `${gitFiles.length} 个文件还没被记录 —— 先点「提交全部」存一个存档点，之后才能回滚`)
+      : '工作区是干净的';
     nodes.gitInit.classList.add('hidden');
     nodes.gitCommit.classList.toggle('hidden', !gitFiles.length);
-    nodes.gitRestoreAll.classList.toggle('hidden', !gitFiles.length);
+    nodes.gitRestoreAll.classList.toggle('hidden', !(gitFiles.length && j.has_commits));
     gitFiles.forEach((f) => {
+      const isNew = f.status === '??';
       const row = el('div', 'git-row');
-      row.appendChild(el('span', 'st ' + (f.status === '??' ? 'new' : 'mod'), f.status));
+      row.appendChild(el('span', 'st ' + (isNew ? 'new' : 'mod'), f.status));
       const p = el('span', 'p', f.path);
       p.title = f.path;
       row.appendChild(p);
-      const rm = el('button', 'rm', '还原');
-      rm.title = '把这个文件恢复成改动前';
+      const rm = el('button', 'rm', isNew ? '删除' : '还原');
+      rm.title = isNew ? '这是新文件，"还原"就是把它删掉' : '把这个文件恢复成改动前';
       rm.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!confirm(`还原 ${f.path}？这个文件里的改动会丢掉。`)) return;
+        if (!confirm(isNew ? `删掉新文件 ${f.path}？` : `还原 ${f.path}？这个文件里的改动会丢掉。`)) return;
         const r = await (await apiFetch('/api/git/action', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ws, action: 'restore', path: f.path }),
