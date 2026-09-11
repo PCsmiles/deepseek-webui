@@ -865,7 +865,11 @@ async function runChat(conv, text) {
     }
   } catch (e) {
     if (e && e.name === 'AbortError') asst.stopped = true;
-    else { err = true; banner('和本地后端断了连接。', '那个黑窗口还在吗？不在就双击桌面图标重启。'); }
+    else {
+      err = true;
+      banner('和本地后端断了连接。',
+        '如果刚重启过服务，按 F5 刷新页面就好；如果一直连不上，双击桌面「鲸语」图标把服务拉起来。');
+    }
   } finally {
     clearTimeout(timer);
     asst.content = cText;
@@ -1001,7 +1005,8 @@ function regenerate(msg) {
   saveAll(); render();
   const lastUser = [...conv.messages].reverse().find((m) => m.role === 'user');
   if (!lastUser) return;
-  if (convMode(conv) === 'agent') runAgent(conv, lastUser.content || '');
+  const ids = (lastUser.attach || []).map((a) => a.id);   // 重新生成也要带上原来的附件
+  if (convMode(conv) === 'agent') runAgent(conv, lastUser.content || '', ids);
   else runChat(conv, lastUser.content || '');
 }
 function setFeedback(m, v) {
