@@ -53,6 +53,13 @@ FILES: dict[str, list[str]] = {
         f"{JSD}/katex@{KATEX_V}/dist/katex.min.css",
         f"{JSD}/katex/dist/katex.min.css",
     ],
+    # UI 字体（可变字重）：西文/数字用 Inter，代码用 JetBrains Mono；中文自动走系统字体
+    "inter-var.woff2": [
+        f"{JSD}/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
+    ],
+    "jetbrains-mono-var.woff2": [
+        f"{JSD}/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2",
+    ],
     "auto-render.min.js": [
         f"{JSD}/katex@{KATEX_V}/dist/contrib/auto-render.min.js",
         f"{JSD}/katex/dist/contrib/auto-render.min.js",

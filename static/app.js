@@ -26,10 +26,47 @@ const TOOL_COLOR = {
   Bash: 'var(--green)', PowerShell: 'var(--green)',
   WebSearch: 'var(--violet)', WebFetch: 'var(--violet)',
 };
+// 工具类型 → 图标名（用统一笔触的 SVG，不用 emoji——emoji 是"业余感"最大的来源）
 const TOOL_ICON = {
-  Read: '👁', Glob: '⌕', Grep: '⌕', Write: '✎', Edit: '✎', MultiEdit: '✎', NotebookEdit: '✎',
-  Bash: '▶', PowerShell: '▶', WebSearch: '🌐', WebFetch: '🌐', Task: '⛓', Skill: '✦',
+  Read: 'eye', Glob: 'search', Grep: 'search',
+  Write: 'pencil', Edit: 'pencil', MultiEdit: 'pencil', NotebookEdit: 'pencil',
+  Bash: 'terminal', PowerShell: 'terminal',
+  WebSearch: 'globe', WebFetch: 'globe',
+  Task: 'link', Skill: 'spark',
 };
+
+// 图标库：24×24 viewBox，1.7px 描边，圆头圆角，全部继承 currentColor
+const ICONS = {
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3.2"/>',
+  pencil: '<path d="M4 20h4L19.5 8.5a2.12 2.12 0 0 0-3-3L5 17v3Z"/><path d="m14.5 6.5 3 3"/>',
+  terminal: '<path d="m5 8 4 4-4 4"/><path d="M12 16h7"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.6-3.6"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.6 2.5 2.6 14.5 0 17-2.6-2.5-2.6-14.5 0-17Z"/>',
+  link: '<path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1 1"/><path d="M13.5 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1-1"/>',
+  spark: '<path d="M12 4l1.7 5.3L19 11l-5.3 1.7L12 18l-1.7-5.3L5 11l5.3-1.7Z"/>',
+  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2M12 19.2v2M4.5 7.5l1.7 1M17.8 15.5l1.7 1M4.5 16.5l1.7-1M17.8 8.5l1.7-1"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/>',
+  plus: '<path d="M12 5.5v13M5.5 12h13"/>',
+  arrowUp: '<path d="M12 19V5.5"/><path d="m6 11.5 6-6 6 6"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="2.2"/>',
+  copy: '<rect x="9" y="9" width="11.5" height="11.5" rx="2.5"/><path d="M6.5 15h-1A1.5 1.5 0 0 1 4 13.5v-8A1.5 1.5 0 0 1 5.5 4h8A1.5 1.5 0 0 1 15 5.5v1"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-1.7 5.7"/><path d="M20 5.5V11h-5.5"/>',
+  thumbUp: '<path d="M7 21V10.5l4-7a1.8 1.8 0 0 1 2.4 1.7V9h5a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.2 21H7Z"/><path d="M7 10.5H4.5A1.5 1.5 0 0 0 3 12v7.5A1.5 1.5 0 0 0 4.5 21H7"/>',
+  thumbDown: '<path d="M17 3v10.5l-4 7a1.8 1.8 0 0 1-2.4-1.7V15H5.6a2 2 0 0 1-2-2.3l1.2-7A2 2 0 0 1 6.8 3H17Z"/><path d="M17 13.5h2.5A1.5 1.5 0 0 0 21 12V4.5A1.5 1.5 0 0 0 19.5 3H17"/>',
+  close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  warn: '<path d="M12 3.8 21 20H3Z"/><path d="M12 10v4.2M12 17.2h.01"/>',
+  chevron: '<path d="m9.5 6 6 6-6 6"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  download: '<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/>',
+};
+function ic(name, size = 14) {
+  return `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" `
+    + `stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" `
+    + `aria-hidden="true">${ICONS[name] || ICONS.spark}</svg>`;
+}
 
 const state = {
   convs: [], currentId: null,
@@ -59,7 +96,7 @@ const nodes = {
   setWorkspace: $('setWorkspace'), setReadonly: $('setReadonly'), setLineNo: $('setLineNo'),
   setReason: $('setReason'), setEnter: $('setEnter'), btnOpenFolder: $('btnOpenFolder'),
   btnExportAll: $('btnExportAll'), aboutNote: $('aboutNote'),
-  keysModal: $('keysModal'), keysClose: $('keysClose'),
+  keysModal: $('keysModal'), keysClose: $('keysClose'), searchIco: $('searchIco'),
   lightbox: $('lightbox'), toast: $('toast'), fileInput: $('fileInput'),
 };
 const live = new Map();   // msgId -> {bodyEl, mdEl, thinkEl, logEl, actsEl, msg}
@@ -202,9 +239,26 @@ async function restoreFromDisk() {
 function applyTheme() {
   const t = state.settings.theme === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', t);
-  nodes.btnTheme.textContent = t === 'dark' ? '🌙' : '☀️';
+  nodes.btnTheme.innerHTML = ic(t === 'dark' ? 'moon' : 'sun', 16);
+  nodes.btnTheme.title = t === 'dark' ? '切到浅色 (Ctrl+J)' : '切到深色 (Ctrl+J)';
   const d = $('hljsDark'), l = $('hljsLight');
   if (d && l) { d.disabled = t !== 'dark'; l.disabled = t === 'dark'; }
+}
+/** 把界面上写死的那些符号换成统一图标（emoji 是"业余感"最大的破绽） */
+function initIcons() {
+  const set = (n, name, size) => { if (n) n.innerHTML = ic(name, size); };
+  set(nodes.btnSide, 'menu', 17);
+  set(nodes.btnSettings, 'gear', 16);
+  set(nodes.btnKeys, 'keyboard', 16);
+  set(nodes.btnAttach, 'plus', 18);
+  set(nodes.btnSend, 'arrowUp', 17);
+  set(nodes.btnStop, 'stop', 13);
+  set(nodes.btnPalette, 'search', 15);
+  set(nodes.btnExport, 'download', 15);
+  set(nodes.keysClose, 'close', 14);
+  set(nodes.setClose, 'close', 15);
+  set(nodes.searchIco, 'search', 13);
+  if (nodes.btnNew) nodes.btnNew.innerHTML = ic('plus', 16) + '<span>新建会话</span>';
 }
 
 // ══════════════ Markdown / 代码 / 公式 ══════════════
@@ -350,7 +404,9 @@ function buildToolEl(s) {
   const box = el('div', 'tool');
   box.style.setProperty('--toolc', color);
   const head = el('div', 'tool-head');
-  head.appendChild(el('span', 'tool-ico', TOOL_ICON[s.name] || '⚙'));
+  const ico = el('span', 'tool-ico');
+  ico.innerHTML = ic(TOOL_ICON[s.name] || 'spark', 14);
+  head.appendChild(ico);
   head.appendChild(el('span', 'tool-name', TOOL_CN[s.name] || s.name));
   head.appendChild(el('span', 'tool-sum', s.summary || ''));
   const st = el('span', 'tool-st ' + (s.kind === 'denied' || s.is_error ? 'bad' : (s.status || '')),
@@ -364,17 +420,29 @@ function buildToolEl(s) {
   } else box.classList.add('collapsed');
   return box;
 }
+/** 思考过程的折叠标题：图标 + 文字（图标也是 SVG，跟别处一套） */
+function thinkSummary(label) {
+  const s = el('summary');
+  const i = el('span');
+  i.innerHTML = ic('spark', 13);
+  i.style.display = 'grid';
+  const t = el('span', null, label);
+  s.appendChild(i); s.appendChild(t);
+  return { el: s, setText: (v) => { t.textContent = v; } };
+}
 function buildReasonEl(text, open) {
   const d = el('details', 'think');
   if (open) d.open = true;
-  const s = el('summary');
+  const sum = thinkSummary('思考过程');
   const b = el('div', 'think-body');
   b.textContent = text || '';
-  d.appendChild(s); d.appendChild(b);
-  const api = { el: d, body: b, summary: s, touched: false,
-    refresh: () => { s.textContent = '💭 思考过程 · ' + (b.textContent || '').length + ' 字'; } };
+  d.appendChild(sum.el); d.appendChild(b);
+  const api = {
+    el: d, body: b, summary: sum.el, touched: false,
+    refresh: () => sum.setText('思考过程 · ' + (b.textContent || '').length + ' 字'),
+  };
   api.refresh();
-  s.addEventListener('click', () => { api.touched = true; });
+  sum.el.addEventListener('click', () => { api.touched = true; });
   return api;
 }
 function buildMessageEl(msg) {
@@ -440,16 +508,17 @@ function renderTools(box, msg) {
 }
 function renderActs(acts, msg) {
   acts.innerHTML = '';
-  const mk = (label, title, fn) => {
-    const b = el('button', null, label);
-    if (title) b.title = title;
+  const mk = (iconName, title, fn) => {
+    const b = el('button');
+    b.innerHTML = ic(iconName, 15);
+    b.title = title;
     b.addEventListener('click', fn); acts.appendChild(b); return b;
   };
-  mk('⧉', '复制全文', async () => { const ok = await copyText(msg.content || ''); toast(ok ? '已复制' : '失败'); });
-  if (!msg.agent) mk('↻', '重新生成', () => regenerate(msg));
-  const up = mk('👍', '有用', () => setFeedback(msg, 'up'));
+  mk('copy', '复制全文', async () => { const ok = await copyText(msg.content || ''); toast(ok ? '已复制' : '复制失败'); });
+  if (!msg.agent) mk('refresh', '重新生成', () => regenerate(msg));
+  const up = mk('thumbUp', '有用', () => setFeedback(msg, 'up'));
   if (msg.feedback === 'up') up.classList.add('on');
-  const dn = mk('👎', '没用', () => setFeedback(msg, 'down'));
+  const dn = mk('thumbDown', '没用', () => setFeedback(msg, 'down'));
   if (msg.feedback === 'down') dn.classList.add('on');
   acts.appendChild(el('span', 'sp'));
   const bits = [];
@@ -500,7 +569,10 @@ function render() {
   conv.messages.slice(start).forEach((m) => {
     const empty = m.role === 'assistant' && !m.content && !m.reasoning && !(m.steps || []).length && !m.error;
     if (empty && m.id !== state.streamingMsgId) return;
-    frag.appendChild(buildMessageEl(m));
+    const elm = buildMessageEl(m);
+    // 只有刚发出来的消息才播入场动画（刷新历史时不要一堆一起动）
+    if (m.ts && Date.now() - m.ts < 3000) elm.classList.add('new');
+    frag.appendChild(elm);
   });
   nodes.streamInner.appendChild(frag);
   // 最后一条 AI 消息的操作栏常显（省得每次都要用鼠标划过去才看得见）
@@ -593,9 +665,12 @@ function banner(title, hint) {
   const box = el('div');
   box.appendChild(el('div', 'bt', title));
   if (hint) box.appendChild(el('div', 'bh', hint));
-  const x = el('button', 'bx', '✕');
+  const x = el('button', 'bx');
+  x.innerHTML = ic('close', 14);
   x.addEventListener('click', hideBanner);
-  nodes.banner.appendChild(el('span', null, '⚠'));
+  const w = el('span', 'b-ico');
+  w.innerHTML = ic('warn', 15);
+  nodes.banner.appendChild(w);
   nodes.banner.appendChild(box); nodes.banner.appendChild(x);
   nodes.banner.classList.remove('hidden');
 }
@@ -1232,6 +1307,7 @@ async function boot() {
     state.currentId = state.convs[0].id; saveCurrentId();
   }
 
+  initIcons();
   bindSettings();
   bindEvents();
   syncMode();
