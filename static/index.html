@@ -6,7 +6,6 @@
 <title>deepseek</title>
 <link rel="icon" href="/static/app.ico">
 <script>
-  // 主题要在渲染前定，不然会闪白
   try {
     var s = JSON.parse(localStorage.getItem('dsui.settings.v1') || '{}');
     if (s.theme) document.documentElement.setAttribute('data-theme', s.theme);
@@ -19,130 +18,163 @@
 </head>
 <body>
 
-<!-- ═══════════════ 顶部状态栏 ═══════════════ -->
-<header class="statusbar" id="statusbar">
-  <div class="sb-left">
-    <span class="sb-dot" id="sbConn" title="后端连接状态"></span>
-    <span class="sb-model" id="sbModel">—</span>
-  </div>
-  <div class="sb-mid" id="sbTitle" title="点一下改标题">new session</div>
-  <div class="sb-right">
-    <span class="sb-stat" id="sbStats">↑0 ↓0</span>
-    <span class="sb-sep">·</span>
-    <span class="sb-stat" id="sbTimer">00:00</span>
-    <span class="sb-gen hidden" id="sbGen"><i></i>Generating…</span>
-    <button class="sb-btn" id="btnPalette" title="命令面板 (Ctrl+K)">⌘K</button>
-    <button class="sb-btn" id="btnSettings" title="设置">⚙</button>
-  </div>
-</header>
+<div class="app" id="app">
 
-<!-- ═══════════════ 消息区 ═══════════════ -->
-<main class="stream" id="stream">
-  <div class="stream-inner" id="streamInner"></div>
-  <div class="stream-foot" id="streamFoot"></div>
-</main>
-
-<!-- ═══════════════ 底部输入区 ═══════════════ -->
-<footer class="prompt-wrap">
-  <div class="banner hidden" id="banner"></div>
-  <div class="attach-row" id="chips"></div>
-  <div class="prompt" id="promptBox">
-    <span class="prompt-sign" id="promptSign">❯</span>
-    <textarea id="input" rows="1" spellcheck="false" placeholder="输入点什么…"></textarea>
-    <button class="p-btn" id="btnAttach" title="添加附件（文档/图片/音频/视频，也可以直接拖进来或 Ctrl+V）">＋</button>
-    <div class="mode-switch" id="modeSwitch" title="CHAT=只回答问题；AGENT=让 Claude Code 真的动你电脑">
-      <button class="mode-btn active" data-mode="chat">CHAT</button>
-      <button class="mode-btn" data-mode="agent">AGENT</button>
+  <!-- ══════════════ 左侧栏 ══════════════ -->
+  <aside class="side" id="side">
+    <div class="side-top">
+      <div class="brand">
+        <span class="brand-logo"></span>
+        <span class="brand-name">deepseek</span>
+        <span class="brand-sub" id="brandSub">本地工作台</span>
+      </div>
+      <button class="new-btn" id="btnNew"><span>＋</span> 新建会话</button>
+      <div class="search">
+        <span class="search-ico">⌕</span>
+        <input id="search" type="search" placeholder="搜索会话…" autocomplete="off">
+      </div>
     </div>
-  </div>
-  <div class="hint" id="hint">
-    <span>Enter 发送 · Shift+Enter 换行 · Esc 中断 · Ctrl+K 命令面板 · / 看命令</span>
-    <span class="hint-right"><span id="hintModel"></span></span>
-  </div>
-</footer>
 
-<!-- ═══════════════ Ctrl+K 命令面板 ═══════════════ -->
+    <nav class="conv-list" id="convList"></nav>
+
+    <div class="side-foot">
+      <button class="bal" id="btnBalance" title="点一下刷新余额">
+        <span class="dot" id="balDot"></span><span id="balText">余额读取中…</span>
+      </button>
+      <div class="foot-row">
+        <button class="icon-btn" id="btnTheme" title="切换深/浅色">🌙</button>
+        <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+        <button class="icon-btn" id="btnKeys" title="快捷键">⌨</button>
+      </div>
+    </div>
+  </aside>
+  <div class="side-mask" id="sideMask"></div>
+
+  <!-- ══════════════ 主区 ══════════════ -->
+  <main class="main">
+    <header class="top">
+      <button class="icon-btn only-narrow" id="btnSide" title="会话列表">☰</button>
+      <div class="top-title">
+        <input id="convTitle" value="新会话" spellcheck="false" title="点一下改名">
+        <div class="top-meta" id="topMeta"></div>
+      </div>
+      <div class="top-right">
+        <div class="seg" id="modeSwitch" title="CHAT=只回答问题；AGENT=真的动你电脑">
+          <button class="seg-btn active" data-mode="chat">CHAT</button>
+          <button class="seg-btn" data-mode="agent">AGENT</button>
+        </div>
+        <button class="icon-btn" id="btnPalette" title="命令面板 (Ctrl+K)">⌘K</button>
+        <button class="icon-btn" id="btnExport" title="导出 Markdown">⤓</button>
+      </div>
+    </header>
+
+    <div class="stream" id="stream">
+      <div class="stream-inner" id="streamInner"></div>
+      <div class="stream-foot" id="streamFoot"></div>
+    </div>
+
+    <footer class="composer-wrap">
+      <div class="banner hidden" id="banner"></div>
+      <div class="attach-row" id="chips"></div>
+      <div class="composer" id="composer">
+        <button class="attach-btn" id="btnAttach" title="加附件：文档/图片/录音/视频（也可拖进来或 Ctrl+V）">＋</button>
+        <textarea id="input" rows="1" spellcheck="false" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="send-btn" id="btnSend" title="发送 (Enter)">➤</button>
+        <button class="send-btn stop hidden" id="btnStop" title="停止 (Esc)">■</button>
+      </div>
+      <div class="hint" id="hint">
+        <span>Enter 发送 · Shift+Enter 换行 · Esc 中断 · Ctrl+K 命令面板</span>
+        <span id="hintRight"></span>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- ══════════════ 命令面板 ══════════════ -->
 <div class="overlay hidden" id="palette">
-  <div class="pal-card">
-    <div class="pal-input-row">
-      <span class="pal-sign">›</span>
-      <input id="palInput" placeholder="搜索对话 / 输入 new 新建 / 输入 / 看命令" spellcheck="false" autocomplete="off">
-    </div>
+  <div class="modal pal">
+    <div class="pal-input"><span>›</span><input id="palInput" placeholder="搜索会话 / 输入 new 新建 / 输入 / 看命令" spellcheck="false" autocomplete="off"></div>
     <div class="pal-list" id="palList"></div>
     <div class="pal-foot" id="palHint">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
   </div>
 </div>
 
-<!-- ═══════════════ 设置浮层 ═══════════════ -->
+<!-- ══════════════ 设置 ══════════════ -->
 <div class="overlay hidden" id="settings">
-  <div class="set-card">
-    <div class="set-head"><span>设置</span><button class="x-btn" id="setClose">✕</button></div>
-    <div class="set-body">
-      <div class="row2">
-        <label class="fld"><span>模型</span><select id="setModel"></select></label>
-        <label class="fld"><span>主题</span>
-          <select id="setTheme">
-            <option value="dark">深色</option>
-            <option value="black">纯黑</option>
-            <option value="light">浅色</option>
-          </select>
-        </label>
-      </div>
-
-      <label class="fld"><span>API Key <em>（存在后端 config.json，不回显明文）</em></span>
-        <div class="key-row">
-          <input type="password" id="setKey" placeholder="留空 = 自动复用 Claude Code 的 Key">
-          <button class="mini-btn" id="setKeyEye" title="显示/隐藏">👁</button>
+  <div class="modal set">
+    <div class="modal-head"><b>设置</b><button class="icon-btn" id="setClose">✕</button></div>
+    <div class="modal-body">
+      <section class="sec">
+        <h4><span class="ico">◈</span>模型与接口</h4>
+        <div class="grid2">
+          <label class="fld"><span>模型</span><select id="setModel"></select></label>
+          <label class="fld"><span>主题</span>
+            <select id="setTheme">
+              <option value="dark">深色</option>
+              <option value="light">浅色</option>
+            </select>
+          </label>
         </div>
-        <span class="fld-note" id="keyNote"></span>
-      </label>
+        <label class="fld"><span>API Key <em>存在后端 config.json，不回显明文</em></span>
+          <div class="row"><input type="password" id="setKey" placeholder="留空 = 自动复用 Claude Code 的 Key"><button class="mini" id="setKeyEye">👁</button></div>
+          <span class="note" id="keyNote"></span>
+        </label>
+        <label class="fld"><span>Base URL</span><input type="text" id="setBase" spellcheck="false" placeholder="https://api.deepseek.com"></label>
+      </section>
 
-      <label class="fld"><span>Base URL</span>
-        <input type="text" id="setBase" spellcheck="false" placeholder="https://api.deepseek.com">
-      </label>
+      <section class="sec">
+        <h4><span class="ico">⚙</span>对话参数</h4>
+        <div class="grid2">
+          <label class="fld"><span>温度 <b id="tempVal">0.7</b></span><input type="range" id="setTemp" min="0" max="2" step="0.1"></label>
+          <label class="fld"><span>Max Tokens</span><input type="number" id="setMax" min="256" max="8192" step="256"></label>
+        </div>
+        <label class="fld"><span>System Prompt</span><textarea id="setSystem" rows="4" spellcheck="false"></textarea></label>
+      </section>
 
-      <div class="row2">
-        <label class="fld"><span>温度 <b id="tempVal">0.7</b></span>
-          <input type="range" id="setTemp" min="0" max="2" step="0.1">
-        </label>
-        <label class="fld"><span>Max Tokens</span>
-          <input type="number" id="setMax" min="256" max="8192" step="256">
-        </label>
-      </div>
+      <section class="sec">
+        <h4><span class="ico">🛠</span>干活模式</h4>
+        <label class="fld"><span>起始目录 <em>只是落脚点，不是沙箱</em></span><input type="text" id="setWorkspace" spellcheck="false" placeholder="E:\"></label>
+        <div class="chk-row">
+          <label class="chk"><input type="checkbox" id="setReadonly"> 只读模式（只能看不能改）</label>
+          <label class="chk"><input type="checkbox" id="setLineNo"> 代码块显示行号</label>
+          <label class="chk"><input type="checkbox" id="setReason"> 显示思考过程</label>
+        </div>
+      </section>
 
-      <label class="fld"><span>System Prompt</span>
-        <textarea id="setSystem" rows="4" spellcheck="false"></textarea>
-      </label>
-
-      <div class="row2">
-        <label class="fld"><span>干活模式起始目录 <em>（不是沙箱，只决定从哪起步）</em></span>
-          <input type="text" id="setWorkspace" spellcheck="false" placeholder="E:\">
-        </label>
-        <label class="fld"><span>其他</span>
-          <span class="chk-row">
-            <label class="chk"><input type="checkbox" id="setReadonly"> 只读模式</label>
-            <label class="chk"><input type="checkbox" id="setLineNo"> 代码行号</label>
-            <label class="chk"><input type="checkbox" id="setReason"> 显示 Thinking</label>
-          </span>
-        </label>
-      </div>
-
-      <div class="row2">
-        <label class="fld"><span>回车键</span>
-          <select id="setEnter">
-            <option value="send">Enter 发送，Shift+Enter 换行</option>
-            <option value="newline">Enter 换行，Ctrl+Enter 发送</option>
-          </select>
-        </label>
-        <label class="fld"><span>数据</span>
-          <span class="chk-row">
-            <button class="mini-btn" id="btnOpenFolder">打开数据文件夹</button>
-            <button class="mini-btn" id="btnExportAll">导出全部</button>
-          </span>
-        </label>
-      </div>
-      <p class="fld-note" id="aboutNote"></p>
+      <section class="sec">
+        <h4><span class="ico">▣</span>数据</h4>
+        <div class="row">
+          <button class="mini" id="btnOpenFolder">打开数据文件夹</button>
+          <button class="mini" id="btnExportAll">导出全部会话</button>
+          <label class="fld" style="flex:1"><span>回车键</span>
+            <select id="setEnter">
+              <option value="send">Enter 发送，Shift+Enter 换行</option>
+              <option value="newline">Enter 换行，Ctrl+Enter 发送</option>
+            </select>
+          </label>
+        </div>
+        <p class="note" id="aboutNote"></p>
+      </section>
     </div>
+  </div>
+</div>
+
+<!-- ══════════════ 快捷键 ══════════════ -->
+<div class="overlay hidden" id="keysModal">
+  <div class="modal keys">
+    <div class="modal-head"><b>快捷键</b><button class="icon-btn" id="keysClose">✕</button></div>
+    <table>
+      <tr><td><kbd>Enter</kbd></td><td>发送</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>换行</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>命令面板（切换/搜索会话）</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>N</kbd></td><td>新建会话</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>J</kbd></td><td>切换深/浅色</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd></td><td>导出当前会话</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>停止生成 / 关面板</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>粘贴截图/文件当附件</td></tr>
+      <tr><td>拖文件进窗口</td><td>加为附件</td></tr>
+      <tr><td>输入 <kbd>/</kbd></td><td>斜杠命令（/new /agent /model …）</td></tr>
+    </table>
   </div>
 </div>
 
