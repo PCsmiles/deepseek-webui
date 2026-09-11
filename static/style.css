@@ -322,6 +322,18 @@ button { cursor: pointer; border: 0; background: none; }
 .msg.new { animation: rise var(--t-slow) var(--ease) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
+/* 切换/新建会话：整块像抽屉一样从右侧滑入，里面的消息依次渐出 */
+.stream-inner.enter { animation: drawer var(--t-slow) var(--ease) both; }
+@keyframes drawer {
+  from { opacity: 0; transform: translateX(14px); }
+  to   { opacity: 1; transform: none; }
+}
+.stream-inner.enter .msg,
+.stream-inner.enter .welcome {
+  animation: rise .34s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 22ms);
+}
+
 .avatar {
   width: 28px; height: 28px; border-radius: 9px; flex: 0 0 auto;
   display: grid; place-items: center; font-size: var(--fs-sm); font-weight: 600;

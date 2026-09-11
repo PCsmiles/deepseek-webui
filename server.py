@@ -551,6 +551,14 @@ async def api_chat(request: Request):
         "max_tokens": max_tokens,
     }
     system = (body.get("system") or "").strip()
+    # 记忆注入：CHAT 模式本来"不认识"用户，把记忆索引塞进 system 就接上了
+    if body.get("memory"):
+        mem = _memory_text()
+        if mem:
+            system = (system + "\n\n" if system else "") + (
+                "【关于这个用户的长期记忆（来自他本机的记忆库，请直接当作已知事实使用，"
+                "不要复述这段、也不要说你读了记忆文件）】\n" + mem
+            )
     if system:
         payload["messages"] = [{"role": "system", "content": system}] + up_msgs
 
@@ -785,7 +793,14 @@ async def api_agent(request: Request):
     session_id = (body.get("session_id") or "").strip()
     readonly = bool(body.get("readonly"))
 
-    cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose"]
+    WEB_CONTEXT_NOTE = (
+        "你正在一个本地的网页工作台里被调用（用户在看浏览器，不是终端 TUI）。"
+        "有几件事你需要知道：① 用户无法做交互式确认，需要他决策就在回答里写清楚，别指望弹窗；"
+        "② 你的会话记录和长期记忆跟终端里是同一套，不用重新认识用户；"
+        "③ 尽量用简洁的结论收尾，他会直接在网页上看。"
+    )
+    cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
+           "--append-system-prompt", WEB_CONTEXT_NOTE]
     if session_id:
         cmd += ["--resume", session_id]
     if readonly:
@@ -1150,6 +1165,158 @@ def _parse_attachment(p: Path, kind: str) -> Dict[str, Any]:
 @app.get("/api/health")
 async def api_health():
     return {"ok": True, "t": time.time()}
+
+
+# ==========================================================================
+#  记忆 & 终端会话：让网页端和终端共用同一个"大脑"
+#  记忆本来就是共享的（各项目目录的 memory 都是同一份的目录链接），
+#  这里只是把它显示出来、并让会话可以互相接管。
+# ==========================================================================
+MEM_DIR = Path.home() / ".claude" / "projects" / "C--WINDOWS-system32" / "memory"
+CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+
+
+def _memory_text(max_chars: int = 6000) -> str:
+    """取记忆索引（MEMORY.md），用于给 CHAT 模式当上下文"""
+    f = MEM_DIR / "MEMORY.md"
+    with contextlib.suppress(Exception):
+        return f.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    return ""
+
+
+@app.get("/api/memory")
+async def api_memory():
+    files = []
+    if MEM_DIR.is_dir():
+        for f in sorted(MEM_DIR.glob("*.md")):
+            with contextlib.suppress(Exception):
+                files.append({"name": f.name, "size": f.stat().st_size,
+                              "mtime": f.stat().st_mtime})
+    return {"ok": True, "dir": str(MEM_DIR), "count": len(files), "files": files}
+
+
+@app.get("/api/memory/{name}")
+async def api_memory_get(name: str):
+    if not re.match(r"^[\w一-鿿.\-]{1,64}\.md$", name):
+        return JSONResponse({"ok": False, "message": "非法文件名"}, status_code=400)
+    f = MEM_DIR / name
+    if not f.exists():
+        return JSONResponse({"ok": False, "message": "没有这个记忆文件"}, status_code=404)
+    return {"ok": True, "name": name, "content": f.read_text(encoding="utf-8", errors="replace")}
+
+
+@app.post("/api/memory/{name}")
+async def api_memory_save(name: str, request: Request):
+    if not re.match(r"^[\w一-鿿.\-]{1,64}\.md$", name):
+        return JSONResponse({"ok": False, "message": "非法文件名"}, status_code=400)
+    body = await request.json()
+    content = body.get("content")
+    if not isinstance(content, str):
+        return JSONResponse({"ok": False, "message": "content 必须是字符串"}, status_code=400)
+    if len(content) > 200_000:
+        return JSONResponse({"ok": False, "message": "太大了"}, status_code=413)
+    (MEM_DIR / name).write_text(content, encoding="utf-8")
+    print(f"[memory] 已保存 {name}（{len(content)} 字）")
+    return {"ok": True, "name": name, "bytes": len(content)}
+
+
+def _session_meta(path: Path) -> Optional[Dict[str, Any]]:
+    """只读每个会话文件的前几行，拿到 cwd / 首条消息 / 时间（快）"""
+    try:
+        cwd, first_user, ts, n_lines = "", "", 0.0, 0
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                n_lines = i + 1
+                if i > 60:
+                    break
+                with contextlib.suppress(Exception):
+                    d = json.loads(line)
+                    if not cwd and d.get("cwd"):
+                        cwd = d["cwd"]
+                    if not ts and d.get("timestamp"):
+                        ts = time.mktime(time.strptime(d["timestamp"][:19], "%Y-%m-%dT%H:%M:%S"))
+                    if not first_user and d.get("type") == "user":
+                        m = d.get("message") or {}
+                        c = m.get("content")
+                        if isinstance(c, str):
+                            first_user = c
+                        elif isinstance(c, list):
+                            first_user = " ".join(x.get("text", "") for x in c
+                                                  if isinstance(x, dict) and x.get("type") == "text")
+        st = path.stat()
+        return {"id": path.stem, "project": path.parent.name, "cwd": cwd,
+                "title": (first_user or "(空会话)").replace("\n", " ")[:70],
+                "ts": ts or st.st_mtime, "size": st.st_size, "lines": n_lines}
+    except Exception:
+        return None
+
+
+@app.get("/api/claude-sessions")
+async def api_claude_sessions(limit: int = 80):
+    """列出终端里跑过的 Claude Code 会话（读 ~/.claude/projects/*/*.jsonl）"""
+    items: List[Dict[str, Any]] = []
+    if CLAUDE_PROJECTS.is_dir():
+        for proj in CLAUDE_PROJECTS.iterdir():
+            if not proj.is_dir():
+                continue
+            for f in proj.glob("*.jsonl"):
+                m = await asyncio.to_thread(_session_meta, f)
+                if m:
+                    items.append(m)
+    items.sort(key=lambda x: -x["ts"])
+    return {"ok": True, "items": items[:limit], "total": len(items)}
+
+
+@app.get("/api/claude-sessions/{sid}")
+async def api_claude_session_read(sid: str, max_msgs: int = 200):
+    """把某个终端会话的完整对话读出来（转成我们前端的格式，好显示在网页上）"""
+    if not re.match(r"^[A-Za-z0-9_-]{8,64}$", sid):
+        return JSONResponse({"ok": False, "message": "非法 session id"}, status_code=400)
+    hit = None
+    for proj in CLAUDE_PROJECTS.iterdir() if CLAUDE_PROJECTS.is_dir() else []:
+        f = proj / f"{sid}.jsonl"
+        if f.exists():
+            hit = f
+            break
+    if not hit:
+        return JSONResponse({"ok": False, "message": "找不到这个会话"}, status_code=404)
+
+    msgs, cwd = [], ""
+    with contextlib.suppress(Exception):
+        with open(hit, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                with contextlib.suppress(Exception):
+                    d = json.loads(line)
+                    if not cwd and d.get("cwd"):
+                        cwd = d["cwd"]
+                    t = d.get("type")
+                    m = d.get("message") or {}
+                    if t == "user":
+                        c = m.get("content")
+                        if isinstance(c, str):
+                            txt = c
+                        elif isinstance(c, list):
+                            txt = " ".join(x.get("text", "") for x in c
+                                           if isinstance(x, dict) and x.get("type") == "text")
+                        else:
+                            txt = ""
+                        txt = (txt or "").strip()
+                        # 跳过工具回执和系统注入的噪声
+                        if txt and not txt.startswith("<") and "system-reminder" not in txt[:40]:
+                            msgs.append({"id": uid_hex(), "role": "user", "ts": 0, "content": txt})
+                    elif t == "assistant":
+                        c = m.get("content") or []
+                        txt = " ".join(x.get("text", "") for x in c
+                                       if isinstance(x, dict) and x.get("type") == "text").strip()
+                        if txt:
+                            msgs.append({"id": uid_hex(), "role": "assistant", "ts": 0, "content": txt})
+    msgs = msgs[-max_msgs:]
+    return {"ok": True, "id": sid, "cwd": cwd, "project": hit.parent.name,
+            "messages": msgs, "count": len(msgs)}
+
+
+def uid_hex() -> str:
+    return os.urandom(6).hex()
 
 
 async def _ingest(name: str, raw: bytes) -> Dict[str, Any]:

@@ -142,6 +142,22 @@
       </section>
 
       <section class="sec">
+        <h4><span class="ico">◆</span>长期记忆 <em class="h4-note">跟终端共用同一份</em></h4>
+        <div class="row">
+          <select id="memPick" style="flex:1"></select>
+          <button class="mini" id="memOpen">打开文件夹</button>
+        </div>
+        <textarea id="memEdit" rows="9" spellcheck="false" placeholder="选一个记忆文件…"></textarea>
+        <div class="row">
+          <button class="mini" id="memSave">保存</button>
+          <span class="note" id="memNote"></span>
+        </div>
+        <div class="chk-row" style="margin-top:4px">
+          <label class="chk"><input type="checkbox" id="setMemory"> CHAT 模式也带上记忆（每句多约 1.5k tokens）</label>
+        </div>
+      </section>
+
+      <section class="sec">
         <h4><span class="ico">▣</span>数据</h4>
         <div class="row">
           <button class="mini" id="btnOpenFolder">打开数据文件夹</button>

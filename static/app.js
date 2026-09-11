@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   theme: 'dark', system: '', temperature: 0.7, max_tokens: 4096,
   enterSend: true, showThinking: true, lineNumbers: false,
   model: 'deepseek-flash', workspace: 'E:\\', readonly: false, mode: 'chat',
+  useMemory: true,      // CHAT 模式是否带上长期记忆（跟终端共用那一份）
 };
 
 const PAGE = 60;
@@ -96,6 +97,8 @@ const nodes = {
   setWorkspace: $('setWorkspace'), setReadonly: $('setReadonly'), setLineNo: $('setLineNo'),
   setReason: $('setReason'), setEnter: $('setEnter'), btnOpenFolder: $('btnOpenFolder'),
   btnExportAll: $('btnExportAll'), aboutNote: $('aboutNote'),
+  memPick: $('memPick'), memOpen: $('memOpen'), memEdit: $('memEdit'),
+  memSave: $('memSave'), memNote: $('memNote'), setMemory: $('setMemory'),
   keysModal: $('keysModal'), keysClose: $('keysClose'), searchIco: $('searchIco'),
   lightbox: $('lightbox'), toast: $('toast'), fileInput: $('fileInput'),
 };
@@ -575,11 +578,20 @@ function render() {
     frag.appendChild(elm);
   });
   nodes.streamInner.appendChild(frag);
+  const kids = Array.from(nodes.streamInner.children);
+  // 每条消息给个序号，切换会话时按顺序渐出（抽屉感）
+  kids.forEach((k, i) => k.style.setProperty('--i', String(Math.min(i, 8))));
   // 最后一条 AI 消息的操作栏常显（省得每次都要用鼠标划过去才看得见）
-  const kids = nodes.streamInner.children;
   for (let i = kids.length - 1; i >= 0; i--) {
     const n = live.get(kids[i].dataset.id);
     if (n && n.actsEl) { n.actsEl.classList.add('pinned'); break; }
+  }
+  // 换会话/新建会话时，整块内容从右侧滑入渐出；同一会话内的重绘不播
+  if (state.lastConvId !== conv.id) {
+    state.lastConvId = conv.id;
+    nodes.streamInner.classList.remove('enter');
+    void nodes.streamInner.offsetWidth;
+    nodes.streamInner.classList.add('enter');
   }
   scrollBottom(true);
   syncTop();
@@ -639,7 +651,9 @@ function syncTop() {
   nodes.convTitle.value = (c && c.title) || '新会话';
   if (!c) { nodes.topMeta.textContent = ''; return; }
   const n = c.messages.filter((m) => m.role === 'user').length;
-  nodes.topMeta.textContent = `${n} 问 · ${c.model || state.settings.model} · ${timeAgo(c.updatedAt)}`;
+  const from = c.origin === 'terminal' ? ' · 来自终端' : '';
+  nodes.topMeta.textContent =
+    `${n} 问 · ${c.model || state.settings.model} · ${timeAgo(c.updatedAt)}${from}`;
 }
 function toggleSide() {
   if (window.innerWidth <= 860) {
@@ -738,6 +752,7 @@ async function runChat(conv, text) {
         model: conv.model || state.settings.model,
         temperature: state.settings.temperature, max_tokens: state.settings.max_tokens,
         system: state.settings.system || '',
+        memory: !!state.settings.useMemory,     // CHAT 模式也带上长期记忆
         messages: conv.messages.map((m) => ({
           role: m.role, content: m.content || '', images: m.images || [],
           attach: (m.attach || []).map((a) => a.id),
@@ -1018,6 +1033,15 @@ function renderPalette() {
       k: c.title || '新会话', t: `${c.messages.length} 条 · ${timeAgo(c.updatedAt)}`, m: '',
       act: () => { state.currentId = c.id; state.shown = PAGE; saveCurrentId(); render(); renderSidebar(); syncMode(); closePalette(); },
     }));
+    // 终端里跑过的会话也能直接接管（同一个大脑，接着聊就行）
+    if (!q) {
+      terminalSessions.slice(0, 8).forEach((s) => palItems.push({
+        k: '终端 · ' + (s.title || '(空会话)'),
+        t: `${timeAgo(s.ts * 1000)}${s.cwd ? ' · ' + s.cwd : ''}`,
+        m: '接管',
+        act: () => { closePalette(); importClaudeSession(s.id); },
+      }));
+    }
   }
   palSel = 0; paintPalette();
 }
@@ -1035,7 +1059,11 @@ function paintPalette() {
 }
 
 // ══════════════ 设置 ══════════════
-function openSettings() { nodes.settings.classList.remove('hidden'); fillSettings(); }
+function openSettings() {
+  nodes.settings.classList.remove('hidden');
+  fillSettings();
+  loadMemoryList();
+}
 function closeSettings() { nodes.settings.classList.add('hidden'); }
 function fillSettings() {
   const cfg = state.config || {};
@@ -1060,6 +1088,7 @@ function fillSettings() {
   nodes.setReadonly.checked = !!state.settings.readonly;
   nodes.setLineNo.checked = !!state.settings.lineNumbers;
   nodes.setReason.checked = !!state.settings.showThinking;
+  nodes.setMemory.checked = state.settings.useMemory !== false;
   nodes.setEnter.value = state.settings.enterSend ? 'send' : 'newline';
   const at = cfg.attach || {};
   nodes.aboutNote.textContent = `v${cfg.version || '?'} · 附件上限 ${fmtNum(at.max_chars || 0)} 字/次 · 语音转写 ${at.asr ? '可用' : '不可用'} · 视频处理 ${at.ffmpeg ? '可用' : '不可用'} · 干活模式 ${cfg.agent_ready ? '就绪' : '未找到 claude'}`;
@@ -1098,6 +1127,16 @@ function bindSettings() {
   });
   nodes.setLineNo.addEventListener('change', () => { state.settings.lineNumbers = nodes.setLineNo.checked; saveSettings(); render(); });
   nodes.setReason.addEventListener('change', () => { state.settings.showThinking = nodes.setReason.checked; saveSettings(); render(); });
+  nodes.setMemory.addEventListener('change', () => {
+    state.settings.useMemory = nodes.setMemory.checked; saveSettings();
+    toast(nodes.setMemory.checked ? 'CHAT 模式会带上你的长期记忆' : 'CHAT 模式不再带记忆（省 token）');
+  });
+  nodes.memPick.addEventListener('change', () => loadMemoryFile(nodes.memPick.value));
+  nodes.memSave.addEventListener('click', saveMemoryFile);
+  nodes.memOpen.addEventListener('click', async () => {
+    const j = await (await apiFetch('/api/open-folder', { method: 'POST' })).json();
+    toast(j.ok ? '已打开数据文件夹（记忆在上一级 .claude 里）' : '打不开', 3000);
+  });
   nodes.setEnter.addEventListener('change', () => { state.settings.enterSend = nodes.setEnter.value === 'send'; saveSettings(); });
   nodes.btnOpenFolder.addEventListener('click', async () => {
     const j = await (await apiFetch('/api/open-folder', { method: 'POST' })).json();
@@ -1179,6 +1218,80 @@ async function refreshBalance(fresh) {
     nodes.balDot.className = 'dot ' + (!j.is_available || v <= 0 ? 'bad' : v < 10 ? 'low' : 'ok');
     nodes.balText.textContent = `余额 ${j.currency} ${j.total}`;
   } catch (e) { nodes.balDot.className = 'dot bad'; nodes.balText.textContent = '余额读取失败'; }
+}
+
+// ══════════════ 长期记忆（跟终端共用同一份） ══════════════
+async function loadMemoryList() {
+  try {
+    const j = await (await apiFetch('/api/memory')).json();
+    nodes.memPick.innerHTML = '';
+    (j.files || []).forEach((f) => {
+      const o = el('option', null, f.name);
+      o.value = f.name;
+      nodes.memPick.appendChild(o);
+    });
+    nodes.memNote.textContent = `共 ${j.count} 个文件 · ${j.dir}`;
+    if ((j.files || []).length) loadMemoryFile(nodes.memPick.value);
+    else nodes.memEdit.value = '（还没有记忆文件）';
+  } catch (e) { nodes.memNote.textContent = '读不到记忆目录：' + e.message; }
+}
+async function loadMemoryFile(name) {
+  if (!name) return;
+  nodes.memEdit.value = '加载中…';
+  try {
+    const j = await (await apiFetch('/api/memory/' + encodeURIComponent(name))).json();
+    nodes.memEdit.value = j.ok ? j.content : ('读不出来：' + j.message);
+  } catch (e) { nodes.memEdit.value = '读不出来：' + e.message; }
+}
+async function saveMemoryFile() {
+  const name = nodes.memPick.value;
+  if (!name) return;
+  try {
+    const j = await (await apiFetch('/api/memory/' + encodeURIComponent(name), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: nodes.memEdit.value }),
+    })).json();
+    toast(j.ok ? `已保存 ${name}` : ('保存失败：' + j.message));
+  } catch (e) { toast('保存失败：' + e.message, 3600); }
+}
+
+// ══════════════ 接管终端会话（同一个大脑，不用重新认识你） ══════════════
+let terminalSessions = [];
+async function loadTerminalSessions() {
+  try {
+    const j = await (await apiFetch('/api/claude-sessions?limit=60')).json();
+    terminalSessions = j.items || [];
+  } catch (e) { terminalSessions = []; }
+  // 数据比面板来得晚就补画一次（否则刚开机就按 Ctrl+K 会看不到终端会话）
+  if (!nodes.palette.classList.contains('hidden') && !(nodes.palInput.value || '').trim()) {
+    renderPalette();
+  }
+}
+async function importClaudeSession(sid) {
+  const exist = state.convs.find((c) => c.claudeSessionId === sid);
+  if (exist) { selectConversation(exist.id); toast('这个终端会话已经在列表里了'); return; }
+  toast('正在读取终端会话…');
+  try {
+    const j = await (await apiFetch('/api/claude-sessions/' + encodeURIComponent(sid))).json();
+    if (!j.ok) { toast('读不出来：' + (j.message || ''), 3600); return; }
+    const firstUser = (j.messages.find((m) => m.role === 'user') || {}).content || '终端会话';
+    const conv = {
+      id: uid(),
+      title: firstUser.replace(/\s+/g, ' ').slice(0, 34),
+      createdAt: Date.now(), updatedAt: Date.now(),
+      model: state.settings.model, mode: 'agent',
+      workspace: j.cwd || state.settings.workspace,
+      agentSessionId: sid,          // ← 关键：后面的消息直接 --resume 接上这段会话
+      claudeSessionId: sid,
+      origin: 'terminal',           // 界面上标出来源
+      messages: j.messages.map((m) => ({ ...m, ts: Date.now() })),
+    };
+    state.convs.unshift(conv);
+    state.currentId = conv.id; state.shown = PAGE;
+    saveAll(); saveCurrentId(); touchConv(conv);
+    render(); renderSidebar(); syncMode();
+    toast(`已接管终端会话（${j.messages.length} 条消息），直接接着聊就行`, 4000);
+  } catch (e) { toast('读不出来：' + e.message, 4000); }
 }
 
 // ══════════════ 事件 ══════════════
@@ -1312,6 +1425,7 @@ async function boot() {
   bindEvents();
   syncMode();
   ensureLibs();
+  loadTerminalSessions();     // 终端里跑过的会话，命令面板里可以直接接管
   render();
   renderSidebar();
   autoGrow();
