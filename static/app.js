@@ -106,6 +106,8 @@ const nodes = {
   setMotion: $('setMotion'), onboard: $('onboard'), obClose: $('obClose'), btnAgain: $('btnAgain'),
   skeleton: $('skeleton'),
   btnGit: $('btnGit'), gitBadge: $('gitBadge'), btnUsage: $('btnUsage'),
+  btnSettingsTop: $('btnSettingsTop'),
+  gitWs: $('gitWs'), gitWsSet: $('gitWsSet'),
   gitModal: $('gitModal'), gitClose: $('gitClose'), gitHead: $('gitHead'), gitMsg: $('gitMsg'),
   gitInit: $('gitInit'), gitCommit: $('gitCommit'), gitRestoreAll: $('gitRestoreAll'),
   gitList: $('gitList'), gitDiff: $('gitDiff'),
@@ -303,6 +305,7 @@ function initIcons() {
   set(nodes.searchIco, 'search', 13);
   set(nodes.btnGit, 'git', 15);
   set(nodes.btnUsage, 'chart', 15);
+  set(nodes.btnSettingsTop, 'gear', 16);
   if (nodes.btnNew) nodes.btnNew.innerHTML = ic('plus', 16) + '<span>新建会话</span>';
 }
 
@@ -1051,6 +1054,7 @@ async function addFiles(files) {
 
 // ══════════════ 斜杠命令 ══════════════
 const SLASH = [
+  ['/settings', '打开设置（改工作目录、Key、模型…）'],
   ['/new', '新建会话'], ['/agent', '切到干活模式'], ['/chat', '切回聊天模式'],
   ['/model', '切换模型，如 /model deepseek-v4-pro'], ['/clear', '清空当前会话'],
   ['/settings', '打开设置'], ['/attach', '按路径加附件'], ['/export', '导出 Markdown'],
@@ -1407,6 +1411,7 @@ async function syncGitBadge() {
 }
 async function refreshGit() {
   const ws = state.settings.workspace || 'E:\\';
+  if (nodes.gitWs) nodes.gitWs.value = ws;
   nodes.gitMsg.textContent = '读取中…';
   nodes.gitList.innerHTML = '';
   nodes.gitDiff.classList.add('hidden');
@@ -1604,6 +1609,20 @@ function bindEvents() {
   nodes.palette.addEventListener('click', (e) => { if (e.target === nodes.palette) closePalette(); });
   // git / 用量
   nodes.btnGit.addEventListener('click', openGit);
+  nodes.btnSettingsTop.addEventListener('click', openSettings);
+  // git 面板里直接换工作目录（省得去设置里翻）
+  nodes.gitWsSet.addEventListener('click', () => {
+    const v = (nodes.gitWs.value || '').trim();
+    if (!v) { toast('先填一个文件夹路径，比如 E:\\git练习'); return; }
+    state.settings.workspace = v;
+    saveSettings();
+    nodes.setWorkspace.value = v;
+    toast('工作目录已换成：' + v);
+    refreshGit();
+    syncGitBadge();
+  });
+  nodes.gitWs.addEventListener('keydown', (e) => { if (e.key === 'Enter') nodes.gitWsSet.click(); });
+  nodes.gitInit.addEventListener('click', () => gitAction('init'));
   nodes.gitClose.addEventListener('click', () => nodes.gitModal.classList.add('hidden'));
   nodes.gitModal.addEventListener('click', (e) => { if (e.target === nodes.gitModal) nodes.gitModal.classList.add('hidden'); });
   nodes.gitInit.addEventListener('click', () => gitAction('init'));
@@ -1731,7 +1750,8 @@ async function boot() {
   refreshBalance(false);
   focusInput();
   if (!cfg.has_key) banner('没有找到 API Key，发消息会失败。', '设置里可以填，或确认 ~/.claude/settings.json 里有 ANTHROPIC_AUTH_TOKEN');
-  // 首次使用引导（只看一次；设置里可以再看）
+  // 首次使用引导（只看一次；设置里可以再看。加 ?nohelp=1 可跳过，方便截图/排查）
+  if (location.search.includes('nohelp=1')) state.settings.onboarded = true;
   if (!state.settings.onboarded) setTimeout(() => nodes.onboard.classList.remove('hidden'), 400);
   // PWA：注册 service worker（只在安全上下文 = localhost / *.localhost / https 里生效；
   // 用 127.0.0.1 之外的 IP 访问时浏览器会拒绝，这里静默降级，不影响使用）

@@ -73,6 +73,7 @@
         <button class="icon-btn git-btn" id="btnGit" title="看改动 / 回滚 / 提交"><span id="gitBadge" class="git-badge hidden"></span></button>
         <button class="icon-btn" id="btnUsage" title="用量与花费"></button>
         <button class="icon-btn" id="btnPalette" title="命令面板 (Ctrl+K)">⌘K</button>
+        <button class="icon-btn" id="btnSettingsTop" title="设置">⚙</button>
         <button class="icon-btn" id="btnExport" title="导出 Markdown">⤓</button>
       </div>
     </header>
@@ -230,6 +231,12 @@
     <div class="modal-head"><b>改动</b><span class="note" id="gitHead"></span>
       <button class="icon-btn" id="gitClose">✕</button></div>
     <div class="modal-body">
+      <div class="row" style="margin-bottom:10px">
+        <span class="note" style="flex:0 0 auto">工作目录</span>
+        <input type="text" id="gitWs" spellcheck="false" placeholder="E:\某个项目文件夹"
+               style="flex:1;background:var(--elev);border:1px solid var(--border);border-radius:9px;padding:6px 10px;outline:none;font-size:12.5px">
+        <button class="mini" id="gitWsSet">用这个</button>
+      </div>
       <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
         <button class="mini" id="gitInit">git init（这样改动才能回滚）</button>
         <button class="mini" id="gitCommit">提交全部</button>
