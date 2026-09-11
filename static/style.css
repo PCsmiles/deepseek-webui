@@ -134,6 +134,9 @@ html[data-theme="light"] {
 
   /* 动效：统一缓动，快而不突兀 */
   --ease: cubic-bezier(.22, .8, .24, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);        /* 出场：快起慢收 */
+  --ease-in: cubic-bezier(.4, 0, 1, 1);           /* 退场 */
+  --ease-spring: cubic-bezier(.34, 1.35, .64, 1); /* 落位回弹 */
   --t-fast: .12s; --t: .18s; --t-slow: .26s;
 
   --maxw: 740px;
@@ -322,16 +325,57 @@ button { cursor: pointer; border: 0; background: none; }
 .msg.new { animation: rise var(--t-slow) var(--ease) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-/* 切换/新建会话：整块像抽屉一样从右侧滑入，里面的消息依次渐出 */
-.stream-inner.enter { animation: drawer var(--t-slow) var(--ease) both; }
-@keyframes drawer {
-  from { opacity: 0; transform: translateX(14px); }
-  to   { opacity: 1; transform: none; }
+/* 切换/新建会话：旧的先淡出滑走，新的从右侧滑入 —— 真·渐进渐出 */
+.stream-inner { will-change: opacity, transform, filter; }
+.stream-inner.leaving { animation: drawerOut .16s var(--ease-in) both; }
+@keyframes drawerOut {
+  from { opacity: 1; transform: none; filter: blur(0); }
+  to   { opacity: 0; transform: translateX(-18px); filter: blur(3px); }
+}
+.stream-inner.enter { animation: drawerIn .42s var(--ease-out) both; }
+@keyframes drawerIn {
+  from { opacity: 0; transform: translateX(26px) scale(.994); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
 }
 .stream-inner.enter .msg,
 .stream-inner.enter .welcome {
-  animation: rise .34s var(--ease) both;
-  animation-delay: calc(var(--i, 0) * 22ms);
+  animation: riseStagger .46s var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+@keyframes riseStagger {
+  from { opacity: 0; transform: translateY(16px) scale(.995); filter: blur(4px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+/* 新消息落地：带一点回弹 */
+.msg.new { animation: dropIn .44s var(--ease-spring) both; }
+@keyframes dropIn {
+  from { opacity: 0; transform: translateY(14px) scale(.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 侧栏：选中指示块会"滑"过去（不是跳过去） */
+.conv-list { position: relative; }
+.conv-ind {
+  position: absolute; left: 8px; right: 8px; top: 0; height: 36px;
+  border-radius: 10px; background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+  opacity: 0; pointer-events: none; z-index: 0;
+  transition: transform .3s var(--ease), height .3s var(--ease), opacity .2s var(--ease);
+}
+.conv-item.active { background: transparent !important; }
+.conv-item { position: relative; z-index: 1; }
+/* 新建出来的会话条目从左侧滑入 */
+.conv-item.fresh { animation: slideIn .34s var(--ease-out) both; }
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 顶栏标题切换：淡入 */
+.top-title.swap { animation: fadeSwap .38s var(--ease-out) both; }
+@keyframes fadeSwap {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
 }
 
 .avatar {
@@ -673,6 +717,13 @@ kbd { display: inline-block; border: 1px solid var(--border); border-bottom-widt
   .msg { margin-bottom: 24px; }
   .hint span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
-@media (prefers-reduced-motion: reduce) {
-  * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+/* 动画由应用内开关控制（html.no-motion）。
+   ⚠️ 不要改回 @media (prefers-reduced-motion)：这台机器系统里"动画效果"是关的，
+   一用媒体查询整站动效会被浏览器全部掐掉（已踩过） */
+html.no-motion *,
+html.no-motion *::before,
+html.no-motion *::after {
+  animation-duration: .001ms !important;
+  animation-delay: 0ms !important;
+  transition-duration: .001ms !important;
 }

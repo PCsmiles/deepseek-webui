@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   enterSend: true, showThinking: true, lineNumbers: false,
   model: 'deepseek-flash', workspace: 'E:\\', readonly: false, mode: 'chat',
   useMemory: true,      // CHAT 模式是否带上长期记忆（跟终端共用那一份）
+  animations: true,     // 界面动画（这台机器系统里动画是关的，所以自己管，不看 prefers-reduced-motion）
 };
 
 const PAGE = 60;
@@ -99,6 +100,7 @@ const nodes = {
   btnExportAll: $('btnExportAll'), aboutNote: $('aboutNote'),
   memPick: $('memPick'), memOpen: $('memOpen'), memEdit: $('memEdit'),
   memSave: $('memSave'), memNote: $('memNote'), setMemory: $('setMemory'),
+  setMotion: $('setMotion'),
   keysModal: $('keysModal'), keysClose: $('keysClose'), searchIco: $('searchIco'),
   lightbox: $('lightbox'), toast: $('toast'), fileInput: $('fileInput'),
 };
@@ -190,9 +192,10 @@ function newConversation(activate = true) {
     workspace: state.settings.workspace || 'E:\\', messages: [],
   };
   state.convs.unshift(c);
+  state.freshConvId = c.id;                 // 侧栏里这条会滑入
   if (activate) { state.currentId = c.id; saveCurrentId(); }
   saveAll();
-  if (activate) { state.shown = PAGE; render(); renderSidebar(); closeSide(); focusInput(); }
+  if (activate) { state.shown = PAGE; render(); renderSidebar(); syncMode(); closeSide(); focusInput(); }
   return c;
 }
 function touchConv(c) { c.updatedAt = Date.now(); saveAll(); scheduleBackup(c); renderSidebar(); }
@@ -247,6 +250,34 @@ function applyTheme() {
   const d = $('hljsDark'), l = $('hljsLight');
   if (d && l) { d.disabled = t !== 'dark'; l.disabled = t === 'dark'; }
 }
+/** 界面动画：自己管开关（系统里 prefers-reduced-motion 是 reduce，不能听它的） */
+function applyMotion() {
+  document.documentElement.classList.toggle('no-motion', state.settings.animations === false);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 切换会话：旧的先淡出滑走，新的再滑入（真·渐进渐出） */
+async function switchConvTo(id) {
+  if (state.currentId === id) return;
+  if (state.settings.animations !== false) {
+    nodes.streamInner.classList.add('leaving');
+    await sleep(150);
+  }
+  nodes.streamInner.classList.remove('leaving');
+  state.currentId = id;
+  state.shown = PAGE;
+  saveCurrentId();
+  render();
+  renderSidebar();
+  syncMode();
+  // 顶栏标题也淡一下
+  const tt = nodes.convTitle.parentElement;
+  tt.classList.remove('swap');
+  void tt.offsetWidth;
+  tt.classList.add('swap');
+  closeSide();
+}
+
 /** 把界面上写死的那些符号换成统一图标（emoji 是"业余感"最大的破绽） */
 function initIcons() {
   const set = (n, name, size) => { if (n) n.innerHTML = ic(name, size); };
@@ -555,8 +586,18 @@ function renderWelcome() {
   w.appendChild(g);
   nodes.streamInner.appendChild(w);
 }
+/** 换会话就播一次入场（放在 render 最前面，空会话的欢迎页也要播） */
+function playEnterIfSwitched(id) {
+  if (state.lastConvId === id) return;
+  state.lastConvId = id;
+  nodes.streamInner.classList.remove('enter', 'leaving');
+  void nodes.streamInner.offsetWidth;
+  nodes.streamInner.classList.add('enter');
+}
+
 function render() {
   const conv = currentConv();
+  playEnterIfSwitched(conv ? conv.id : '(none)');
   live.clear();
   nodes.streamInner.innerHTML = '';
   nodes.streamFoot.innerHTML = '';
@@ -586,13 +627,6 @@ function render() {
     const n = live.get(kids[i].dataset.id);
     if (n && n.actsEl) { n.actsEl.classList.add('pinned'); break; }
   }
-  // 换会话/新建会话时，整块内容从右侧滑入渐出；同一会话内的重绘不播
-  if (state.lastConvId !== conv.id) {
-    state.lastConvId = conv.id;
-    nodes.streamInner.classList.remove('enter');
-    void nodes.streamInner.offsetWidth;
-    nodes.streamInner.classList.add('enter');
-  }
   scrollBottom(true);
   syncTop();
 }
@@ -607,7 +641,10 @@ function renderSidebar() {
   const list = state.convs.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     .filter((c) => !q || (c.title || '').toLowerCase().includes(q) ||
       c.messages.some((m) => (m.content || '').toLowerCase().includes(q)));
-  nodes.convList.innerHTML = '';
+  // 只清条目，保留那个会"滑"的选中指示块（清掉它就滑不起来了）
+  Array.from(nodes.convList.children).forEach((c) => {
+    if (!c.classList.contains('conv-ind')) c.remove();
+  });
   if (!list.length) {
     nodes.convList.appendChild(el('div', 'conv-empty', q ? '没有匹配的会话' : '还没有会话'));
     return;
@@ -616,7 +653,9 @@ function renderSidebar() {
   list.forEach((c) => {
     const g = dayGroup(c.updatedAt);
     if (g !== lastGroup) { nodes.convList.appendChild(el('div', 'conv-group', g)); lastGroup = g; }
-    const b = el('button', 'conv-item' + (c.id === state.currentId ? ' active' : ''));
+    const cls = 'conv-item' + (c.id === state.currentId ? ' active' : '')
+      + (c.id === state.freshConvId ? ' fresh' : '');
+    const b = el('button', cls);
     b.appendChild(el('span', 't', c.title || '新会话'));
     b.appendChild(el('span', 'n', String(c.messages.length)));
     const del = el('button', 'del', '✕');
@@ -626,11 +665,27 @@ function renderSidebar() {
     b.addEventListener('click', () => selectConversation(c.id));
     nodes.convList.appendChild(b);
   });
+  state.freshConvId = null;
+  // 选中指示块：位置一变就"滑"过去（而不是跳）
+  let ind = nodes.convList.querySelector('.conv-ind');
+  if (!ind) { ind = el('span', 'conv-ind'); nodes.convList.appendChild(ind); }
+  const act = nodes.convList.querySelector('.conv-item.active');
+  if (act) {
+    if (!ind.dataset.ready) {                      // 首次定位不播动画
+      ind.style.transition = 'none';
+      ind.dataset.ready = '1';
+      requestAnimationFrame(() => { ind.style.transition = ''; });
+    }
+    ind.style.transform = `translateY(${act.offsetTop}px)`;
+    ind.style.height = act.offsetHeight + 'px';
+    ind.style.opacity = '1';
+  } else {
+    ind.style.opacity = '0';
+  }
 }
 function selectConversation(id) {
   if (state.streaming) { toast('正在生成，先按 Esc 中断'); return; }
-  state.currentId = id; state.shown = PAGE;
-  saveCurrentId(); render(); renderSidebar(); syncMode(); closeSide();
+  switchConvTo(id);
 }
 function deleteConversation(id) {
   const c = state.convs.find((x) => x.id === id);
@@ -1089,6 +1144,7 @@ function fillSettings() {
   nodes.setLineNo.checked = !!state.settings.lineNumbers;
   nodes.setReason.checked = !!state.settings.showThinking;
   nodes.setMemory.checked = state.settings.useMemory !== false;
+  nodes.setMotion.checked = state.settings.animations !== false;
   nodes.setEnter.value = state.settings.enterSend ? 'send' : 'newline';
   const at = cfg.attach || {};
   nodes.aboutNote.textContent = `v${cfg.version || '?'} · 附件上限 ${fmtNum(at.max_chars || 0)} 字/次 · 语音转写 ${at.asr ? '可用' : '不可用'} · 视频处理 ${at.ffmpeg ? '可用' : '不可用'} · 干活模式 ${cfg.agent_ready ? '就绪' : '未找到 claude'}`;
@@ -1130,6 +1186,11 @@ function bindSettings() {
   nodes.setMemory.addEventListener('change', () => {
     state.settings.useMemory = nodes.setMemory.checked; saveSettings();
     toast(nodes.setMemory.checked ? 'CHAT 模式会带上你的长期记忆' : 'CHAT 模式不再带记忆（省 token）');
+  });
+  nodes.setMotion.addEventListener('change', () => {
+    state.settings.animations = nodes.setMotion.checked;
+    saveSettings(); applyMotion();
+    toast(nodes.setMotion.checked ? '界面动画已打开' : '界面动画已关闭');
   });
   nodes.memPick.addEventListener('change', () => loadMemoryFile(nodes.memPick.value));
   nodes.memSave.addEventListener('click', saveMemoryFile);
@@ -1287,9 +1348,9 @@ async function importClaudeSession(sid) {
       messages: j.messages.map((m) => ({ ...m, ts: Date.now() })),
     };
     state.convs.unshift(conv);
-    state.currentId = conv.id; state.shown = PAGE;
-    saveAll(); saveCurrentId(); touchConv(conv);
-    render(); renderSidebar(); syncMode();
+    state.freshConvId = conv.id;
+    saveAll(); touchConv(conv);
+    await switchConvTo(conv.id);
     toast(`已接管终端会话（${j.messages.length} 条消息），直接接着聊就行`, 4000);
   } catch (e) { toast('读不出来：' + e.message, 4000); }
 }
@@ -1421,6 +1482,7 @@ async function boot() {
   }
 
   initIcons();
+  applyMotion();
   bindSettings();
   bindEvents();
   syncMode();
@@ -1436,14 +1498,30 @@ async function boot() {
   if (location.search.includes('panel=palette')) openPalette();
   if (location.search.includes('theme=light')) { state.settings.theme = 'light'; applyTheme(); }
   if (location.search.includes('theme=dark')) { state.settings.theme = 'dark'; applyTheme(); }
-  // 只读探针：?probe=1 把关键宽度写进标题，方便排查布局
+  // 慢放 8 倍：网址后面加 ?slowmo=1 就能看清动效（确认动画到底有没有生效）
+  if (location.search.includes('slowmo=1')) {
+    const st = document.createElement('style');
+    st.textContent =
+      '.stream-inner.enter{animation-duration:6s!important}'
+      + '.stream-inner.enter .msg,.stream-inner.enter .welcome{animation-duration:6s!important;animation-delay:0ms!important}'
+      + '.stream-inner.leaving{animation-duration:3s!important}'
+      + '.conv-ind{transition-duration:3s!important}'
+      + '.msg.new{animation-duration:6s!important}';
+    document.head.appendChild(st);
+    toast('慢放模式：动效放慢 8 倍', 5000);
+  }
+  // 只读探针：?probe=1 把关键状态写进标题，方便排查（布局 / 动画开关 / 指示块位置）
   if (location.search.includes('probe=1')) {
     setTimeout(() => {
       const m = document.querySelector('.main');
-      document.title = `PROBE vw=${innerWidth} app=${nodes.app.offsetWidth} side=${nodes.side.offsetWidth} `
-        + `main=${m ? m.offsetWidth : -1} stream=${nodes.stream.offsetWidth} inner=${nodes.streamInner.offsetWidth} `
-        + `composer=${nodes.composer.offsetWidth} collapsed=${nodes.app.classList.contains('collapsed')}`;
-    }, 600);
+      const si = nodes.streamInner;
+      const cs = si ? getComputedStyle(si) : null;
+      const ind = nodes.convList.querySelector('.conv-ind');
+      document.title = `PROBE vw=${innerWidth} main=${m ? m.offsetWidth : -1} inner=${si.offsetWidth} `
+        + `motion=${!document.documentElement.classList.contains('no-motion')} `
+        + `anim=${cs && cs.animationName}/${cs && cs.animationDuration} enter=${si.classList.contains('enter')} `
+        + `ind=${ind ? Math.round(ind.offsetTop) + '+' + Math.round(ind.offsetHeight) : 'none'}`;
+    }, 900);
   }
   console.log('deepseek webui v2 就绪', cfg.version);
 }
