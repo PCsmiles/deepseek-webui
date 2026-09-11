@@ -254,7 +254,24 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 #   做法：所有写操作都要带一个随机令牌（只有本地这个页面知道，别的网站读不到），
 #        再顺手校验 Origin，双保险。
 # --------------------------------------------------------------------------
-TOKEN = os.environ.get("DSUI_TOKEN") or secrets.token_urlsafe(24)
+# 令牌要**持久化**：以前每次重启都换新的，害得已经打开的页面全部失效
+# （用户实测报过"访问令牌不对"）。现在存在 data/token.txt，重启后不变。
+def _load_token() -> str:
+    env = (os.environ.get("DSUI_TOKEN") or "").strip()
+    if env:
+        return env
+    f = DATA_DIR / "token.txt"
+    with contextlib.suppress(Exception):
+        old = f.read_text(encoding="utf-8").strip()
+        if len(old) >= 16:
+            return old
+    tok = secrets.token_urlsafe(24)
+    with contextlib.suppress(Exception):
+        f.write_text(tok, encoding="utf-8")
+    return tok
+
+
+TOKEN = _load_token()
 _ORIGIN_OK = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
 
 

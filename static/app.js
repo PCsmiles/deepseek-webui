@@ -169,10 +169,26 @@ async function copyText(t) {
     } catch (e2) { return false; }
   }
 }
-function apiFetch(url, opts) {
-  const o = Object.assign({}, opts || {});
-  o.headers = Object.assign({}, o.headers || {}, { 'X-DSUI-Token': state.token });
-  return fetch(url, o);
+async function apiFetch(url, opts) {
+  const doFetch = () => {
+    const o = Object.assign({}, opts || {});
+    o.headers = Object.assign({}, o.headers || {}, { 'X-DSUI-Token': state.token });
+    return fetch(url, o);
+  };
+  let res = await doFetch();
+  // 403 = 令牌不对（多半是服务刚重启过、页面手里是旧令牌）→ 重新取一个再试一次，
+  // 用户不用手动刷新页面
+  if (res && res.status === 403) {
+    try {
+      const cfg = await (await fetch('/api/config')).json();
+      if (cfg && cfg.token) {
+        state.token = cfg.token;
+        res = await doFetch();
+        if (res.status !== 403) console.info('访问令牌已自动更新');
+      }
+    } catch (e) { /* 后端真连不上，交给调用方报错 */ }
+  }
+  return res;
 }
 
 // ══════════════ 存档 ══════════════
