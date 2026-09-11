@@ -74,7 +74,7 @@ if os.environ.get("DSUI_SILENT") == "1":
         sys.stdout = _log
         sys.stderr = _log
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_SYSTEM_PROMPT = "你是 DeepSeek，一个乐于助人、回答准确的中文 AI 助手。回答用简体中文，代码要能直接运行。"
 

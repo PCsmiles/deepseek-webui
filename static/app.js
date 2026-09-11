@@ -1772,7 +1772,7 @@ async function boot() {
   // PWA：注册 service worker（只在安全上下文 = localhost / *.localhost / https 里生效；
   // 用 127.0.0.1 之外的 IP 访问时浏览器会拒绝，这里静默降级，不影响使用）
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/static/sw.js')
+    navigator.serviceWorker.register('/static/sw.js', { updateViaCache: 'none' })
       .then((r) => {
         window.__sw = r.active ? 'active' : (r.installing ? 'installing' : 'registered');
       })
