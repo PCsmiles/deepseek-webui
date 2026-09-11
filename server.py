@@ -272,7 +272,12 @@ def _load_token() -> str:
 
 
 TOKEN = _load_token()
-_ORIGIN_OK = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+# 允许的来源：本机各种写法 + 任何 *.localhost（deepseek.localhost 也在这里面）。
+# ⚠️ 千万别漏掉 .localhost：换了好看的域名却没更新这里，会导致浏览器发的请求全被 403
+# （而且 Python 直连测试不带 Origin 头，测不出来 —— 踩过一次）
+_ORIGIN_OK = re.compile(
+    r"^http://(127\.0\.0\.1|localhost|\[::1\]|[A-Za-z0-9._-]+\.localhost)(:\d+)?$"
+)
 
 
 @app.middleware("http")
@@ -1206,6 +1211,12 @@ def _parse_attachment(p: Path, kind: str) -> Dict[str, Any]:
 
 @app.get("/api/health")
 async def api_health():
+    return {"ok": True, "t": time.time()}
+
+
+@app.post("/api/ping")
+async def api_ping():
+    """写操作连通性自检（前端会用它确认"令牌 + Origin 都放行"）"""
     return {"ok": True, "t": time.time()}
 
 

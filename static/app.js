@@ -1821,6 +1821,10 @@ async function boot() {
         + `anim=${cs && cs.animationName}/${cs && cs.animationDuration} enter=${si.classList.contains('enter')} `
         + `ind=${ind ? Math.round(ind.offsetTop) + '+' + Math.round(ind.offsetHeight) : 'none'} `
         + `sw=${window.__sw || 'none'}`;
+      // 顺手做一次写操作自检（真浏览器会带 Origin 头，这正是之前踩坑的地方）
+      apiFetch('/api/ping', { method: 'POST' })
+        .then((r) => { document.title += ` ping=${r.status}`; })
+        .catch((e) => { document.title += ' ping=ERR'; });
     }, 900);
   }
   console.log('deepseek webui v2 就绪', cfg.version);
