@@ -783,6 +783,31 @@ async def api_agent(request: Request):
     if not prompt:
         return JSONResponse({"ok": False, "message": "没说要干什么"}, status_code=400)
 
+    # 附件也要给 Claude Code 看到！否则「贴了图但 agent 看不见」——
+    # 图片/扫描件给本地路径让它自己 Read；已经解析成文字的（文档/录音）直接内联。
+    atts = [a for a in (body.get("attach") or []) if isinstance(a, str)]
+    if atts:
+        blocks: List[str] = []
+        budget = MAX_INJECT_CHARS
+        for aid in atts:
+            meta = _load_attachment(aid)
+            if not meta:
+                continue
+            name = meta.get("name") or aid
+            for im in (meta.get("images") or []):
+                f = IMG_DIR / im
+                if f.exists():
+                    blocks.append(f"- 「{name}」的本地图片路径：{f}\n  （请用 Read 工具打开它，看清楚内容再回答）")
+            if meta.get("text") and meta.get("kind") != "image":
+                use = meta["text"][:budget]
+                budget -= len(use)
+                cut = "" if len(use) == len(meta["text"]) else "\n…（按上限截断）"
+                blocks.append(f'<file name="{name}">\n{use}{cut}\n</file>')
+        if blocks:
+            print(f"[agent] 附带 {len(blocks)} 份材料一起交给它")
+            prompt = ("【用户附带的材料】\n" + "\n".join(blocks)
+                      + "\n\n【用户说的话】\n" + prompt)
+
     # 起始目录只决定 claude 从哪儿起步，**不是沙箱**（它照样能访问别的盘/目录）。
     # 所以填错了不值得报错打断用户——直接用家目录兜底，日志里记一笔就行。
     workspace = str(body.get("workspace") or "").strip() or str(Path.home())

@@ -787,7 +787,7 @@ async function send() {
   nodes.input.value = ''; autoGrow();
   state.attach = []; renderChips(); hideBanner();
   touchConv(conv);
-  if (convMode(conv) === 'agent') return runAgent(conv, text);
+  if (convMode(conv) === 'agent') return runAgent(conv, text, atts.map((a) => a.id));
   return runChat(conv, text);
 }
 async function runChat(conv, text) {
@@ -880,7 +880,7 @@ async function runChat(conv, text) {
     render();
   }
 }
-async function runAgent(conv, text) {
+async function runAgent(conv, text, attachIds) {
   const asst = { id: uid(), role: 'assistant', ts: Date.now(), content: '', reasoning: '', steps: [], agent: true, model: 'claude-code' };
   conv.messages.push(asst);
   state.streamingMsgId = asst.id;
@@ -915,6 +915,7 @@ async function runAgent(conv, text) {
       body: JSON.stringify({
         prompt: text, workspace: state.settings.workspace || 'E:\\',
         session_id: conv.agentSessionId || '', readonly: !!state.settings.readonly,
+        attach: attachIds || [],     // 附件也要交给 agent（图片给路径让它自己 Read）
       }),
     });
     if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
