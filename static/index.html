@@ -3,8 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>deepseek</title>
+<title>deepseek 本地工作台</title>
+<meta name="description" content="本地 AI 聊天工作台：CHAT 接 DeepSeek，AGENT 直接驱动 Claude Code 干活；附件全在本地解析。">
+<meta name="theme-color" content="#0a0c11">
 <link rel="icon" href="/static/app.ico">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="deepseek">
 <script>
   try {
     var s = JSON.parse(localStorage.getItem('dsui.settings.v1') || '{}');
@@ -71,7 +78,26 @@
     </header>
 
     <div class="stream" id="stream">
-      <div class="stream-inner" id="streamInner"></div>
+      <div class="stream-inner" id="streamInner">
+        <!-- 首屏骨架（render 一开始就会把它清掉，纯占位，不用 JS） -->
+        <div class="skeleton">
+          <div class="sk-row">
+            <div class="sk-av"></div>
+            <div class="sk-lines">
+              <div class="sk-line w40"></div>
+              <div class="sk-line w90"></div>
+              <div class="sk-line w70"></div>
+            </div>
+          </div>
+          <div class="sk-row">
+            <div class="sk-av"></div>
+            <div class="sk-lines">
+              <div class="sk-line w55"></div>
+              <div class="sk-line w80"></div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="stream-foot" id="streamFoot"></div>
     </div>
 
@@ -165,6 +191,7 @@
         <div class="row">
           <button class="mini" id="btnOpenFolder">打开数据文件夹</button>
           <button class="mini" id="btnExportAll">导出全部会话</button>
+          <button class="mini" id="btnAgain">再看一次引导</button>
           <label class="fld" style="flex:1"><span>回车键</span>
             <select id="setEnter">
               <option value="send">Enter 发送，Shift+Enter 换行</option>
@@ -220,6 +247,27 @@
   <div class="modal">
     <div class="modal-head"><b>用量与花费</b><button class="icon-btn" id="usageClose">✕</button></div>
     <div class="modal-body" id="usageBody"></div>
+  </div>
+</div>
+
+<!-- ══════════════ 首次使用引导 ══════════════ -->
+<div class="overlay hidden" id="onboard">
+  <div class="modal onboard">
+    <div class="ob-head">
+      <span class="brand-logo"></span>
+      <div><b>欢迎使用 deepseek 本地工作台</b><span>三步就能用起来</span></div>
+    </div>
+    <div class="ob-body">
+      <div class="ob-item"><span class="ob-n">1</span><div>
+        <b>直接开问</b><p>Enter 发送，Shift+Enter 换行，Esc 中断。<br>API Key 已经自动接上了，不用配置。</p></div></div>
+      <div class="ob-item"><span class="ob-n">2</span><div>
+        <b>要它动你电脑，就切到 AGENT</b><p>右上角的 <code>CHAT | AGENT</code> 开关。AGENT 模式下它能读写文件、跑命令，
+        每一步都会显示成卡片；改完还能在顶栏的 Git 按钮里一键回滚。</p></div></div>
+      <div class="ob-item"><span class="ob-n">3</span><div>
+        <b>贴图、丢文档都行</b><p>Ctrl+V 粘贴截图、拖文件进来。PDF / Word / Excel / 录音 / 视频都会在本地解析。</p></div></div>
+      <div class="ob-tip">⌘ <b>Ctrl+K</b> 是万能入口：搜索会话、<b>接管你在终端里的对话</b>、跑斜杠命令</div>
+    </div>
+    <div class="ob-foot"><button class="mini" id="obClose">知道了，开始用</button></div>
   </div>
 </div>
 

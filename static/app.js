@@ -103,7 +103,8 @@ const nodes = {
   btnExportAll: $('btnExportAll'), aboutNote: $('aboutNote'),
   memPick: $('memPick'), memOpen: $('memOpen'), memEdit: $('memEdit'),
   memSave: $('memSave'), memNote: $('memNote'), setMemory: $('setMemory'),
-  setMotion: $('setMotion'),
+  setMotion: $('setMotion'), onboard: $('onboard'), obClose: $('obClose'), btnAgain: $('btnAgain'),
+  skeleton: $('skeleton'),
   btnGit: $('btnGit'), gitBadge: $('gitBadge'), btnUsage: $('btnUsage'),
   gitModal: $('gitModal'), gitClose: $('gitClose'), gitHead: $('gitHead'), gitMsg: $('gitMsg'),
   gitInit: $('gitInit'), gitCommit: $('gitCommit'), gitRestoreAll: $('gitRestoreAll'),
@@ -1231,6 +1232,12 @@ function bindSettings() {
     toast(j.ok ? '已打开文件夹' : '打不开：' + (j.message || ''), 3200);
   });
   nodes.btnExportAll.addEventListener('click', exportAll);
+  nodes.btnAgain.addEventListener('click', () => nodes.onboard.classList.remove('hidden'));
+  nodes.obClose.addEventListener('click', () => {
+    nodes.onboard.classList.add('hidden');
+    state.settings.onboarded = true;
+    saveSettings();
+  });
   const saveKey = async () => {
     const body = { base_url: nodes.setBase.value.trim() };
     if (nodes.setKey.value.trim()) body.api_key = nodes.setKey.value.trim();
@@ -1646,6 +1653,7 @@ function bindEvents() {
     if (e.key === 'Escape') {
       if (!nodes.lightbox.classList.contains('hidden')) { nodes.lightbox.classList.add('hidden'); return; }
       if (!nodes.palette.classList.contains('hidden')) { closePalette(); return; }
+      if (!nodes.onboard.classList.contains('hidden')) { nodes.obClose.click(); return; }
       if (!nodes.gitModal.classList.contains('hidden')) { nodes.gitModal.classList.add('hidden'); return; }
       if (!nodes.usageModal.classList.contains('hidden')) { nodes.usageModal.classList.add('hidden'); return; }
       if (!nodes.settings.classList.contains('hidden')) { closeSettings(); return; }
@@ -1718,6 +1726,22 @@ async function boot() {
   refreshBalance(false);
   focusInput();
   if (!cfg.has_key) banner('没有找到 API Key，发消息会失败。', '设置里可以填，或确认 ~/.claude/settings.json 里有 ANTHROPIC_AUTH_TOKEN');
+  // 首次使用引导（只看一次；设置里可以再看）
+  if (!state.settings.onboarded) setTimeout(() => nodes.onboard.classList.remove('hidden'), 400);
+  // PWA：注册 service worker（只在安全上下文 = localhost / *.localhost / https 里生效；
+  // 用 127.0.0.1 之外的 IP 访问时浏览器会拒绝，这里静默降级，不影响使用）
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/sw.js')
+      .then((r) => {
+        window.__sw = r.active ? 'active' : (r.installing ? 'installing' : 'registered');
+      })
+      .catch((e) => {
+        window.__sw = 'fail:' + (e && e.name);
+        console.warn('service worker 没注册上（不影响使用）:', e && e.message);
+      });
+  } else {
+    window.__sw = 'unsupported';
+  }
   if (location.search.includes('panel=settings')) openSettings();
   if (location.search.includes('panel=palette')) openPalette();
   if (location.search.includes('panel=git')) openGit();
@@ -1754,7 +1778,8 @@ async function boot() {
       document.title = `PROBE vw=${innerWidth} main=${m ? m.offsetWidth : -1} inner=${si.offsetWidth} `
         + `motion=${!document.documentElement.classList.contains('no-motion')} `
         + `anim=${cs && cs.animationName}/${cs && cs.animationDuration} enter=${si.classList.contains('enter')} `
-        + `ind=${ind ? Math.round(ind.offsetTop) + '+' + Math.round(ind.offsetHeight) : 'none'}`;
+        + `ind=${ind ? Math.round(ind.offsetTop) + '+' + Math.round(ind.offsetHeight) : 'none'} `
+        + `sw=${window.__sw || 'none'}`;
     }, 900);
   }
   console.log('deepseek webui v2 就绪', cfg.version);

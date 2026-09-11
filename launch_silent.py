@@ -19,7 +19,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PORT_FILE = ROOT / "data" / "port.txt"
-DEFAULT_PORT = 8765
+DEFAULT_PORT = 80
+# 网址用 deepseek.localhost：浏览器把 *.localhost 当"安全上下文"，
+# 这样 PWA（装成 App / 离线秒开）才生效；deepseek.local 虽然也能解析但不算安全上下文（实测）
+PRETTY_HOST = "deepseek.localhost"
+
+
+def pretty_url(port: int) -> str:
+    """优先用好记的域名（hosts 里配过才有效），没有就退回 IP"""
+    try:
+        socket.gethostbyname(PRETTY_HOST)
+        host = PRETTY_HOST
+    except Exception:
+        host = "127.0.0.1"
+    return f"http://{host}{'' if port == 80 else ':' + str(port)}/"
 
 
 def alive(port: int, timeout: float = 0.6) -> bool:
@@ -52,7 +65,7 @@ def main() -> None:
     port = known_port()
     if alive(port):
         print(f"[silent] 服务已在 {port} 跑着，只开浏览器")
-        webbrowser.open(f"http://127.0.0.1:{port}/")
+        webbrowser.open(pretty_url(port))
         return
 
     print("[silent] 服务没在跑，后台拉起…")
@@ -74,11 +87,11 @@ def main() -> None:
             break
     else:
         print("[silent] 等了 30 秒服务还没起来，去 data/server.log 看原因")
-        webbrowser.open(f"http://127.0.0.1:{port}/")
+        webbrowser.open(pretty_url(port))
         return
 
     print(f"[silent] 起来了，打开 http://127.0.0.1:{port}/")
-    webbrowser.open(f"http://127.0.0.1:{port}/")
+    webbrowser.open(pretty_url(port))
 
 
 if __name__ == "__main__":

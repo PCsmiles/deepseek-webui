@@ -129,7 +129,7 @@ def load_config() -> Dict[str, Any]:
         "max_tokens": 4096,
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
         "host": "127.0.0.1",
-        "port": 8765,
+        "port": 80,          # 80 → 网址就是干净的 http://deepseek.local（占用会自动往后找）
     }
 
     f = ROOT / "config.json"
@@ -1642,7 +1642,7 @@ def pick_port(host: str, port: int, tries: int = 12) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description="DeepSeek 本地聊天 UI")
     ap.add_argument("--host", default=CONFIG.get("host", "127.0.0.1"))
-    ap.add_argument("--port", type=int, default=int(CONFIG.get("port", 8765)))
+    ap.add_argument("--port", type=int, default=int(CONFIG.get("port", 80)))
     ap.add_argument("--no-browser", action="store_true", help="启动后不自动开浏览器")
     ap.add_argument("--reload", action="store_true", help="改代码自动重启(开发用)")
     args = ap.parse_args()
