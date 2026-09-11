@@ -1,0 +1,28 @@
+# 运行数据：会话、附件、图片、日志、端口记录 —— 都是本机私事，绝不提交
+data/
+
+# 本机配置（可能含 API Key）
+config.json
+
+# 第三方前端库：不打包进仓库（体积 + 许可），由 install_assets.py 现下
+# start.bat 首次启动会自动跑它
+static/vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器/系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 临时产物（我自己调试时生成的截图/浏览器配置）
+_*.png
+_hl*/
+_uiprof*/
+_testfiles/
+*.log

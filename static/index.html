@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>deepseek</title>
+<link rel="icon" href="/static/app.ico">
+<script>
+  // 主题要在渲染前定，不然会闪白
+  try {
+    var s = JSON.parse(localStorage.getItem('dsui.settings.v1') || '{}');
+    if (s.theme) document.documentElement.setAttribute('data-theme', s.theme);
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/style.css">
+<link id="hljsDark" rel="stylesheet" href="/static/vendor/github-dark.min.css">
+<link id="hljsLight" rel="stylesheet" href="/static/vendor/github.min.css" disabled>
+<link id="katexCss" rel="stylesheet" href="/static/vendor/katex.min.css">
+</head>
+<body>
+
+<!-- ═══════════════ 顶部状态栏 ═══════════════ -->
+<header class="statusbar" id="statusbar">
+  <div class="sb-left">
+    <span class="sb-dot" id="sbConn" title="后端连接状态"></span>
+    <span class="sb-model" id="sbModel">—</span>
+  </div>
+  <div class="sb-mid" id="sbTitle" title="点一下改标题">new session</div>
+  <div class="sb-right">
+    <span class="sb-stat" id="sbStats">↑0 ↓0</span>
+    <span class="sb-sep">·</span>
+    <span class="sb-stat" id="sbTimer">00:00</span>
+    <span class="sb-gen hidden" id="sbGen"><i></i>Generating…</span>
+    <button class="sb-btn" id="btnPalette" title="命令面板 (Ctrl+K)">⌘K</button>
+    <button class="sb-btn" id="btnSettings" title="设置">⚙</button>
+  </div>
+</header>
+
+<!-- ═══════════════ 消息区 ═══════════════ -->
+<main class="stream" id="stream">
+  <div class="stream-inner" id="streamInner"></div>
+  <div class="stream-foot" id="streamFoot"></div>
+</main>
+
+<!-- ═══════════════ 底部输入区 ═══════════════ -->
+<footer class="prompt-wrap">
+  <div class="banner hidden" id="banner"></div>
+  <div class="attach-row" id="chips"></div>
+  <div class="prompt" id="promptBox">
+    <span class="prompt-sign" id="promptSign">❯</span>
+    <textarea id="input" rows="1" spellcheck="false" placeholder="输入点什么…"></textarea>
+    <button class="p-btn" id="btnAttach" title="添加附件（文档/图片/音频/视频，也可以直接拖进来或 Ctrl+V）">＋</button>
+    <div class="mode-switch" id="modeSwitch" title="CHAT=只回答问题；AGENT=让 Claude Code 真的动你电脑">
+      <button class="mode-btn active" data-mode="chat">CHAT</button>
+      <button class="mode-btn" data-mode="agent">AGENT</button>
+    </div>
+  </div>
+  <div class="hint" id="hint">
+    <span>Enter 发送 · Shift+Enter 换行 · Esc 中断 · Ctrl+K 命令面板 · / 看命令</span>
+    <span class="hint-right"><span id="hintModel"></span></span>
+  </div>
+</footer>
+
+<!-- ═══════════════ Ctrl+K 命令面板 ═══════════════ -->
+<div class="overlay hidden" id="palette">
+  <div class="pal-card">
+    <div class="pal-input-row">
+      <span class="pal-sign">›</span>
+      <input id="palInput" placeholder="搜索对话 / 输入 new 新建 / 输入 / 看命令" spellcheck="false" autocomplete="off">
+    </div>
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot" id="palHint">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+  </div>
+</div>
+
+<!-- ═══════════════ 设置浮层 ═══════════════ -->
+<div class="overlay hidden" id="settings">
+  <div class="set-card">
+    <div class="set-head"><span>设置</span><button class="x-btn" id="setClose">✕</button></div>
+    <div class="set-body">
+      <div class="row2">
+        <label class="fld"><span>模型</span><select id="setModel"></select></label>
+        <label class="fld"><span>主题</span>
+          <select id="setTheme">
+            <option value="dark">深色</option>
+            <option value="black">纯黑</option>
+            <option value="light">浅色</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="fld"><span>API Key <em>（存在后端 config.json，不回显明文）</em></span>
+        <div class="key-row">
+          <input type="password" id="setKey" placeholder="留空 = 自动复用 Claude Code 的 Key">
+          <button class="mini-btn" id="setKeyEye" title="显示/隐藏">👁</button>
+        </div>
+        <span class="fld-note" id="keyNote"></span>
+      </label>
+
+      <label class="fld"><span>Base URL</span>
+        <input type="text" id="setBase" spellcheck="false" placeholder="https://api.deepseek.com">
+      </label>
+
+      <div class="row2">
+        <label class="fld"><span>温度 <b id="tempVal">0.7</b></span>
+          <input type="range" id="setTemp" min="0" max="2" step="0.1">
+        </label>
+        <label class="fld"><span>Max Tokens</span>
+          <input type="number" id="setMax" min="256" max="8192" step="256">
+        </label>
+      </div>
+
+      <label class="fld"><span>System Prompt</span>
+        <textarea id="setSystem" rows="4" spellcheck="false"></textarea>
+      </label>
+
+      <div class="row2">
+        <label class="fld"><span>干活模式起始目录 <em>（不是沙箱，只决定从哪起步）</em></span>
+          <input type="text" id="setWorkspace" spellcheck="false" placeholder="E:\">
+        </label>
+        <label class="fld"><span>其他</span>
+          <span class="chk-row">
+            <label class="chk"><input type="checkbox" id="setReadonly"> 只读模式</label>
+            <label class="chk"><input type="checkbox" id="setLineNo"> 代码行号</label>
+            <label class="chk"><input type="checkbox" id="setReason"> 显示 Thinking</label>
+          </span>
+        </label>
+      </div>
+
+      <div class="row2">
+        <label class="fld"><span>回车键</span>
+          <select id="setEnter">
+            <option value="send">Enter 发送，Shift+Enter 换行</option>
+            <option value="newline">Enter 换行，Ctrl+Enter 发送</option>
+          </select>
+        </label>
+        <label class="fld"><span>数据</span>
+          <span class="chk-row">
+            <button class="mini-btn" id="btnOpenFolder">打开数据文件夹</button>
+            <button class="mini-btn" id="btnExportAll">导出全部</button>
+          </span>
+        </label>
+      </div>
+      <p class="fld-note" id="aboutNote"></p>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox hidden" id="lightbox"><img alt=""></div>
+<div class="toast hidden" id="toast"></div>
+<input type="file" id="fileInput" multiple hidden>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

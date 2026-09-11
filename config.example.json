@@ -1,0 +1,24 @@
+{
+  "_说明": "想改配置就把这个文件复制成 config.json（同目录），改完重启 python server.py 生效。",
+
+  "_api_key": "一般不用填！程序会自动去 ~/.claude/settings.json 复用 Claude Code 那把 DeepSeek Key。想用别的 Key 才填这里，或者设环境变量 DEEPSEEK_API_KEY（环境变量优先级最高）。",
+  "api_key": "",
+
+  "_base_url": "DeepSeek 的 OpenAI 兼容接口地址，一般不用改",
+  "base_url": "https://api.deepseek.com",
+
+  "_model": "默认模型：deepseek-flash（快、能看图）或 deepseek-v4-pro（更强、读不了图）。注意别加 [1M] 后缀。",
+  "model": "deepseek-flash",
+
+  "_temperature": "0~2，越大越发散",
+  "temperature": 0.7,
+
+  "_max_tokens": "1~8192，思考过程也算在里面",
+  "max_tokens": 4096,
+
+  "_system_prompt": "系统提示词，也可以在网页的设置里改",
+  "system_prompt": "你是 DeepSeek，一个乐于助人、回答准确的中文 AI 助手。回答用简体中文，代码要能直接运行。",
+
+  "_port": "端口被占用时会自动往后找",
+  "port": 8765
+}

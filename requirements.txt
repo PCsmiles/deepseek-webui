@@ -1,0 +1,6 @@
+# DeepSeek 本地聊天 UI 的依赖
+# 你的电脑上 fastapi / uvicorn / requests 已经装好了，通常只需要补一个 httpx
+fastapi>=0.100
+uvicorn>=0.23
+httpx>=0.24
+requests>=2.28

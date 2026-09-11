@@ -1,0 +1,15 @@
+# 换行符规范化：.bat 必须 CRLF（LF 的 .bat 在 Windows 上会解析失败，踩过）
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.py  text eol=lf
+*.js  text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md  text eol=lf
+*.json text eol=lf
+
+# 二进制
+*.png binary
+*.ico binary
+*.woff2 binary
