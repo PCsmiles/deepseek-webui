@@ -1168,6 +1168,135 @@ async def api_health():
 
 
 # ==========================================================================
+#  Git：看改动 / 看 diff / 一键还原 / 提交
+#  不自己造快照系统，直接复用 git（怕 AI 改坏代码时的救命按钮）
+# ==========================================================================
+def _git(args: List[str], cwd: str, timeout: int = 30) -> tuple[int, str]:
+    try:
+        r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout,
+                           creationflags=0x08000000 if sys.platform.startswith("win") else 0)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except FileNotFoundError:
+        return 127, "没装 git"
+    except subprocess.TimeoutExpired:
+        return 124, "git 命令超时"
+
+
+def _safe_ws(ws: str) -> Optional[Path]:
+    p = Path(ws or "").expanduser()
+    return p if p.is_dir() else None
+
+
+@app.get("/api/git")
+async def api_git(ws: str = ""):
+    """看一眼这个目录的 git 状态（不是仓库就明确说）"""
+    p = _safe_ws(ws)
+    if not p:
+        return {"ok": False, "is_repo": False, "message": f"目录不存在：{ws}"}
+    code, out = await asyncio.to_thread(_git, ["rev-parse", "--is-inside-work-tree"], str(p))
+    if code != 0 or "true" not in out:
+        return {"ok": True, "is_repo": False, "ws": str(p),
+                "message": "这个目录还不是 git 仓库（可以先初始化，之后改动就能一键回滚）"}
+
+    _, branch = await asyncio.to_thread(_git, ["branch", "--show-current"], str(p))
+    _, porcelain = await asyncio.to_thread(_git, ["status", "--porcelain=v1"], str(p))
+    files = []
+    for line in porcelain.splitlines():
+        if len(line) < 4:
+            continue
+        st, path = line[:2].strip() or "??", line[3:].strip().strip('"')
+        files.append({"status": st, "path": path})
+    _, log = await asyncio.to_thread(_git, ["log", "-1", "--format=%h %s"], str(p))
+    return {"ok": True, "is_repo": True, "ws": str(p), "branch": branch.strip(),
+            "files": files, "head": log.strip()}
+
+
+@app.get("/api/git/diff")
+async def api_git_diff(ws: str = "", path: str = ""):
+    """单个文件的 diff（已暂存 + 未暂存都算上）"""
+    p = _safe_ws(ws)
+    if not p or not path:
+        return {"ok": False, "message": "参数不对"}
+    if ".." in path or path.startswith("/") or ":" in path:
+        return {"ok": False, "message": "非法路径"}
+    _, untracked = await asyncio.to_thread(_git, ["ls-files", "--others", "--exclude-standard", "--", path], str(p))
+    if untracked.strip():
+        # 新文件没有 diff，直接把内容给出来
+        f = p / path
+        with contextlib.suppress(Exception):
+            txt = f.read_text(encoding="utf-8", errors="replace")[:20000]
+            return {"ok": True, "diff": f"（新文件，共 {f.stat().st_size} 字节）\n\n" + txt, "is_new": True}
+        return {"ok": True, "diff": "（新文件）", "is_new": True}
+    _, d = await asyncio.to_thread(_git, ["diff", "HEAD", "--", path], str(p))
+    if not d.strip():
+        _, d = await asyncio.to_thread(_git, ["diff", "--", path], str(p))
+    return {"ok": True, "diff": d[:60000]}
+
+
+@app.post("/api/git/action")
+async def api_git_action(request: Request):
+    """写操作：init / restore（还原单个或全部）/ commit"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    p = _safe_ws(str(body.get("ws") or ""))
+    if not p:
+        return JSONResponse({"ok": False, "message": "工作目录不存在"}, status_code=400)
+    action = body.get("action")
+    path = str(body.get("path") or "")
+
+    if action == "init":
+        code, out = await asyncio.to_thread(_git, ["init"], str(p))
+        return {"ok": code == 0, "message": out.strip()[-200:] or "已初始化"}
+
+    if action == "restore":
+        if path:
+            if ".." in path or path.startswith("/") or ":" in path:
+                return JSONResponse({"ok": False, "message": "非法路径"}, status_code=400)
+            # 先确认这个文件确实在改动列表里，避免误删
+            _, porcelain = await asyncio.to_thread(_git, ["status", "--porcelain=v1"], str(p))
+            if path not in porcelain:
+                return JSONResponse({"ok": False, "message": "这个文件当前没有改动"}, status_code=400)
+            code, out = await asyncio.to_thread(_git, ["checkout", "--", path], str(p))
+            if code != 0:   # 新文件用 checkout 恢复不了，直接删
+                code, out = await asyncio.to_thread(_git, ["clean", "-f", "--", path], str(p))
+            return {"ok": code == 0, "message": (out or "已还原").strip()[-200:]}
+        # 全部还原
+        await asyncio.to_thread(_git, ["checkout", "--", "."], str(p))
+        code, out = await asyncio.to_thread(_git, ["clean", "-fd"], str(p))
+        print(f"[git] 全部还原：{p}")
+        return {"ok": code == 0, "message": (out or "已全部还原").strip()[-200:]}
+
+    if action == "commit":
+        msg = str(body.get("message") or "").strip() or f"webui: 改动 {time.strftime('%m-%d %H:%M')}"
+        await asyncio.to_thread(_git, ["add", "-A"], str(p))
+        code, out = await asyncio.to_thread(_git, ["commit", "-m", msg], str(p))
+        return {"ok": code == 0, "message": out.strip()[-300:]}
+
+    return JSONResponse({"ok": False, "message": f"不认识的动作：{action}"}, status_code=400)
+
+
+@app.post("/api/attach-text")
+async def api_attach_text(request: Request):
+    """把一段长文本当成附件（前端粘贴超长文本时用，免得撑爆输入框）"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    text = body.get("text") or ""
+    if not text.strip():
+        return JSONResponse({"ok": False, "message": "内容是空的"}, status_code=400)
+    name = str(body.get("name") or "").strip() or f"粘贴的文本_{time.strftime('%H%M%S')}.txt"
+    if not name.lower().endswith((".txt", ".md", ".log", ".csv", ".json")):
+        name += ".txt"
+    meta = await _ingest(name, text.encode("utf-8"))
+    return {"ok": True, "id": meta["id"], "name": meta["name"], "kind": meta["kind"],
+            "size": meta["size"], "note": meta["note"], "text_chars": len(meta["text"])}
+
+
+# ==========================================================================
 #  记忆 & 终端会话：让网页端和终端共用同一个"大脑"
 #  记忆本来就是共享的（各项目目录的 memory 都是同一份的目录链接），
 #  这里只是把它显示出来、并让会话可以互相接管。

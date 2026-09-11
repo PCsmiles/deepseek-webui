@@ -245,10 +245,13 @@ button { cursor: pointer; border: 0; background: none; }
 .conv-item .n { font-size: var(--fs-xs); color: var(--faint); font-variant-numeric: tabular-nums;
   min-width: 18px; text-align: right; }
 .conv-item.active .n { color: color-mix(in srgb, var(--accent) 85%, var(--text)); }
-.conv-item .del { opacity: 0; color: var(--faint); padding: 3px; border-radius: var(--r-xs);
-  display: grid; place-items: center; transition: all var(--t-fast); }
-.conv-item:hover .del { opacity: .85; }
+.conv-item .del, .conv-item .pin { opacity: 0; color: var(--faint); padding: 3px;
+  border-radius: var(--r-xs); display: grid; place-items: center;
+  transition: all var(--t-fast); }
+.conv-item:hover .del, .conv-item:hover .pin { opacity: .85; }
 .conv-item .del:hover { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.conv-item .pin:hover { color: var(--accent); background: var(--accent-soft); }
+.conv-item .pin.on { opacity: 1; color: var(--accent); }
 .conv-empty { padding: 30px 14px; text-align: center; color: var(--faint); font-size: var(--fs-sm); }
 
 /* 遮罩必须默认就 fixed，否则会变成 .app 网格里的一个格子，把主区挤走 */
@@ -627,6 +630,67 @@ pre code.hljs { background: transparent !important; padding: 0 !important; }
 .hint { display: flex; justify-content: space-between; padding: 9px 8px 0;
   font-size: var(--fs-xs); color: var(--faint); letter-spacing: .1px; }
 .hint kbd { margin: 0 1px; }
+
+/* ══════════════════ Git 面板 ══════════════════ */
+.git-btn { position: relative; }
+.git-badge {
+  position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px;
+  padding: 0 4px; border-radius: var(--r-full); font-size: 9.5px; line-height: 15px;
+  text-align: center; background: var(--amber); color: #1a1206; font-weight: 700;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.git-list { border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; margin-bottom: 10px; }
+.git-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--border-soft); transition: background var(--t); }
+.git-row:last-child { border-bottom: 0; }
+.git-row:hover { background: var(--hover); }
+.git-row .st { flex: 0 0 auto; font-family: var(--mono); font-size: var(--fs-xs); font-weight: 700;
+  color: var(--amber); min-width: 22px; }
+.git-row .st.new { color: var(--green); }
+.git-row .p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.git-row .rm { flex: 0 0 auto; color: var(--faint); font-size: var(--fs-xs); padding: 2px 8px;
+  border-radius: var(--r-xs); border: 1px solid var(--border); opacity: 0;
+  transition: all var(--t-fast); }
+.git-row:hover .rm { opacity: 1; }
+.git-row .rm:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.git-diff {
+  margin: 0; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--code-bg); font-family: var(--mono); font-size: 12.2px; line-height: 1.65;
+  max-height: 46vh; overflow: auto; white-space: pre; color: var(--dim);
+}
+.git-diff .da { display: block; background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--text); }
+.git-diff .dd { display: block; background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--text); }
+.git-diff .dh { display: block; color: var(--accent); }
+.git-diff .dl { display: block; color: var(--faint); }
+.mini.danger:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+
+/* ══════════════════ 用量 ══════════════════ */
+.usage-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px; margin-bottom: 6px; }
+.usage-top > div { background: var(--elev); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 10px 12px; box-shadow: var(--hl); }
+.usage-top b { display: block; font-size: 16px; font-weight: 620; color: var(--text-strong);
+  font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+.usage-top span { font-size: var(--fs-xs); color: var(--faint); }
+.usage-h { margin: 16px 0 9px; font-size: var(--fs-md); font-weight: 600; }
+.usage-chart { display: flex; align-items: flex-end; gap: 5px; height: 130px;
+  padding: 10px 4px 0; border-bottom: 1px solid var(--border); }
+.ucol { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  height: 100%; gap: 4px; }
+.ubar { width: 100%; max-width: 26px; border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent-2) 55%, var(--accent)));
+  transition: height var(--t-slow) var(--ease); }
+.ucol:hover .ubar { filter: brightness(1.15); }
+.ulab { font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.urow { display: flex; align-items: center; gap: 10px; padding: 8px 2px;
+  border-bottom: 1px solid var(--border-soft); font-size: var(--fs-md); }
+.urow:last-of-type { border-bottom: 0; }
+.urow .k { flex: 1; min-width: 0; color: var(--text); font-family: var(--mono); font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urow .n { color: var(--faint); font-size: var(--fs-xs); }
+.urow .v { color: var(--dim); font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
+.urow .m { color: var(--accent); font-variant-numeric: tabular-nums; font-size: var(--fs-sm); min-width: 62px; text-align: right; }
 
 /* ══════════════════ 弹层 ══════════════════ */
 .overlay { position: fixed; inset: 0; background: rgba(6, 8, 14, .55); display: flex;

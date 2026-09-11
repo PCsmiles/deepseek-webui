@@ -63,6 +63,9 @@ const ICONS = {
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   download: '<path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/>',
+  git: '<circle cx="6.5" cy="6" r="2.6"/><circle cx="6.5" cy="18" r="2.6"/><circle cx="17.5" cy="12" r="2.6"/><path d="M6.5 8.6v6.8"/><path d="M9.1 6h3.4a2.4 2.4 0 0 1 2.4 2.4v1.1"/><path d="M9.1 18h3.4a2.4 2.4 0 0 0 2.4-2.4v-1.1"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  pin: '<path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/><path d="M12 14v7"/>',
 };
 function ic(name, size = 14) {
   return `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" `
@@ -101,6 +104,11 @@ const nodes = {
   memPick: $('memPick'), memOpen: $('memOpen'), memEdit: $('memEdit'),
   memSave: $('memSave'), memNote: $('memNote'), setMemory: $('setMemory'),
   setMotion: $('setMotion'),
+  btnGit: $('btnGit'), gitBadge: $('gitBadge'), btnUsage: $('btnUsage'),
+  gitModal: $('gitModal'), gitClose: $('gitClose'), gitHead: $('gitHead'), gitMsg: $('gitMsg'),
+  gitInit: $('gitInit'), gitCommit: $('gitCommit'), gitRestoreAll: $('gitRestoreAll'),
+  gitList: $('gitList'), gitDiff: $('gitDiff'),
+  usageModal: $('usageModal'), usageClose: $('usageClose'), usageBody: $('usageBody'),
   keysModal: $('keysModal'), keysClose: $('keysClose'), searchIco: $('searchIco'),
   lightbox: $('lightbox'), toast: $('toast'), fileInput: $('fileInput'),
 };
@@ -292,6 +300,8 @@ function initIcons() {
   set(nodes.keysClose, 'close', 14);
   set(nodes.setClose, 'close', 15);
   set(nodes.searchIco, 'search', 13);
+  set(nodes.btnGit, 'git', 15);
+  set(nodes.btnUsage, 'chart', 15);
   if (nodes.btnNew) nodes.btnNew.innerHTML = ic('plus', 16) + '<span>新建会话</span>';
 }
 
@@ -638,7 +648,8 @@ function scrollBottom(force) {
 // ══════════════ 侧栏 ══════════════
 function renderSidebar() {
   const q = state.search.trim().toLowerCase();
-  const list = state.convs.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  const list = state.convs.slice()
+    .sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || ((b.updatedAt || 0) - (a.updatedAt || 0)))
     .filter((c) => !q || (c.title || '').toLowerCase().includes(q) ||
       c.messages.some((m) => (m.content || '').toLowerCase().includes(q)));
   // 只清条目，保留那个会"滑"的选中指示块（清掉它就滑不起来了）
@@ -651,13 +662,22 @@ function renderSidebar() {
   }
   let lastGroup = '';
   list.forEach((c) => {
-    const g = dayGroup(c.updatedAt);
+    const g = c.pinned ? '置顶' : dayGroup(c.updatedAt);
     if (g !== lastGroup) { nodes.convList.appendChild(el('div', 'conv-group', g)); lastGroup = g; }
     const cls = 'conv-item' + (c.id === state.currentId ? ' active' : '')
       + (c.id === state.freshConvId ? ' fresh' : '');
     const b = el('button', cls);
     b.appendChild(el('span', 't', c.title || '新会话'));
     b.appendChild(el('span', 'n', String(c.messages.length)));
+    const pin = el('button', 'pin' + (c.pinned ? ' on' : ''));
+    pin.innerHTML = ic('pin', 12);
+    pin.title = c.pinned ? '取消置顶' : '置顶';
+    pin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      c.pinned = !c.pinned;
+      saveAll(); renderSidebar();
+    });
+    b.appendChild(pin);
     const del = el('button', 'del', '✕');
     del.title = '删除';
     del.addEventListener('click', (e) => { e.stopPropagation(); deleteConversation(c.id); });
@@ -951,6 +971,7 @@ async function runAgent(conv, text) {
     setStreaming(false);
     if (!err && !cText && mdEl) mdEl.innerHTML = '<p style="color:var(--faint)">（这次没产出最终回答，看上面的工具卡片）</p>';
     touchConv(conv);
+    syncGitBadge();     // AGENT 可能改了文件，刷新顶栏的改动数
     render();
   }
 }
@@ -1355,6 +1376,180 @@ async function importClaudeSession(sid) {
   } catch (e) { toast('读不出来：' + e.message, 4000); }
 }
 
+// ══════════════ Git：看改动 / 回滚 / 提交 ══════════════
+let gitFiles = [];
+function updateGitBadge(n) {
+  if (!nodes.gitBadge) return;
+  nodes.gitBadge.textContent = n > 99 ? '99+' : String(n);
+  nodes.gitBadge.classList.toggle('hidden', !n);
+}
+async function openGit() { nodes.gitModal.classList.remove('hidden'); refreshGit(); }
+/** 只更新顶栏那个小圆点（不打开面板） */
+async function syncGitBadge() {
+  const ws = state.settings.workspace || 'E:\\';
+  try {
+    const j = await (await apiFetch('/api/git?ws=' + encodeURIComponent(ws))).json();
+    updateGitBadge(j.is_repo ? (j.files || []).length : 0);
+  } catch (e) { updateGitBadge(0); }
+}
+async function refreshGit() {
+  const ws = state.settings.workspace || 'E:\\';
+  nodes.gitMsg.textContent = '读取中…';
+  nodes.gitList.innerHTML = '';
+  nodes.gitDiff.classList.add('hidden');
+  try {
+    const j = await (await apiFetch('/api/git?ws=' + encodeURIComponent(ws))).json();
+    nodes.gitHead.textContent = ws;
+    if (!j.is_repo) {
+      nodes.gitMsg.textContent = j.message || '不是 git 仓库';
+      nodes.gitInit.classList.remove('hidden');
+      nodes.gitCommit.classList.add('hidden');
+      nodes.gitRestoreAll.classList.add('hidden');
+      updateGitBadge(0);
+      return;
+    }
+    gitFiles = j.files || [];
+    nodes.gitHead.textContent = `${j.branch || '-'} · ${(j.head || '还没有提交').slice(0, 40)}`;
+    nodes.gitMsg.textContent = gitFiles.length ? `${gitFiles.length} 个文件改过` : '工作区是干净的';
+    nodes.gitInit.classList.add('hidden');
+    nodes.gitCommit.classList.toggle('hidden', !gitFiles.length);
+    nodes.gitRestoreAll.classList.toggle('hidden', !gitFiles.length);
+    gitFiles.forEach((f) => {
+      const row = el('div', 'git-row');
+      row.appendChild(el('span', 'st ' + (f.status === '??' ? 'new' : 'mod'), f.status));
+      const p = el('span', 'p', f.path);
+      p.title = f.path;
+      row.appendChild(p);
+      const rm = el('button', 'rm', '还原');
+      rm.title = '把这个文件恢复成改动前';
+      rm.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`还原 ${f.path}？这个文件里的改动会丢掉。`)) return;
+        const r = await (await apiFetch('/api/git/action', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ws, action: 'restore', path: f.path }),
+        })).json();
+        toast(r.ok ? '已还原 ' + f.path : ('还原失败：' + r.message), 3200);
+        refreshGit();
+      });
+      row.appendChild(rm);
+      row.addEventListener('click', async () => {
+        nodes.gitDiff.classList.remove('hidden');
+        nodes.gitDiff.textContent = '读取中…';
+        const d = await (await apiFetch('/api/git/diff?ws=' + encodeURIComponent(ws)
+          + '&path=' + encodeURIComponent(f.path))).json();
+        if (!d.ok) { nodes.gitDiff.textContent = d.message || '读不到'; return; }
+        paintDiff(nodes.gitDiff, d.diff || '（没有可显示的 diff）');
+      });
+      nodes.gitList.appendChild(row);
+    });
+    updateGitBadge(gitFiles.length);
+    // ?autodiff=1 时自动展开第一个文件的 diff（截图/自检用）
+    if (location.search.includes('autodiff') && gitFiles.length) {
+      const first = nodes.gitList.querySelector('.git-row');
+      if (first) first.click();
+    }
+  } catch (e) {
+    nodes.gitMsg.textContent = '读不到：' + e.message;
+  }
+}
+function paintDiff(pre, text) {
+  pre.innerHTML = text.split('\n').map((l) => {
+    const t = escapeHtml(l);
+    if (l.startsWith('+++') || l.startsWith('---')) return `<span class="dl">${t}</span>`;
+    if (l.startsWith('@@')) return `<span class="dh">${t}</span>`;
+    if (l.startsWith('+')) return `<span class="da">${t}</span>`;
+    if (l.startsWith('-')) return `<span class="dd">${t}</span>`;
+    return `<span>${t}</span>`;
+  }).join('\n');
+}
+async function gitAction(action, extra = {}) {
+  const ws = state.settings.workspace || 'E:\\';
+  const j = await (await apiFetch('/api/git/action', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ ws, action }, extra)),
+  })).json();
+  toast(j.ok ? (j.message || '完成').slice(0, 80) : ('失败：' + j.message), 3600);
+  refreshGit();
+}
+
+// ══════════════ 用量与花费 ══════════════
+const PRICE_IN = 1 / 1e6, PRICE_OUT = 2 / 1e6;   // 估算用：¥1 / ¥2 每百万 tokens
+function openUsage() { nodes.usageModal.classList.remove('hidden'); renderUsage(); }
+function renderUsage() {
+  const byDay = {}, byModel = {};
+  let ti = 0, to = 0, nMsg = 0;
+  state.convs.forEach((c) => {
+    (c.messages || []).forEach((m) => {
+      let i = 0, o = 0;
+      if (m.usage) { i = m.usage.prompt_tokens || 0; o = m.usage.completion_tokens || 0; }
+      else if (m.agentUsage) { i = m.agentUsage.input_tokens || 0; o = m.agentUsage.output_tokens || 0; }
+      if (!i && !o) return;
+      ti += i; to += o; nMsg++;
+      const day = new Date(m.ts || Date.now()).toISOString().slice(0, 10);
+      (byDay[day] = byDay[day] || { i: 0, o: 0 }).i += i;
+      byDay[day].o += o;
+      const md = m.agent ? 'claude-code(AGENT)' : (c.model || 'deepseek-flash');
+      const e = (byModel[md] = byModel[md] || { i: 0, o: 0, n: 0 });
+      e.i += i; e.o += o; e.n++;
+    });
+  });
+  const money = (i, o) => `≈¥${(i * PRICE_IN + o * PRICE_OUT).toFixed(3)}`;
+  const days = Object.keys(byDay).sort().slice(-14);
+  const maxDay = Math.max(1, ...days.map((d) => byDay[d].i + byDay[d].o));
+  const body = nodes.usageBody;
+  body.innerHTML = '';
+  const head = el('div', 'usage-top');
+  head.innerHTML = `<div><b>${fmtNum(ti + to)}</b><span>总 tokens</span></div>
+    <div><b>${fmtNum(ti)}</b><span>输入</span></div>
+    <div><b>${fmtNum(to)}</b><span>输出</span></div>
+    <div><b>${money(ti, to)}</b><span>估算花费</span></div>
+    <div><b>${nMsg}</b><span>计入的消息</span></div>`;
+  body.appendChild(head);
+  body.appendChild(el('h4', 'usage-h', '最近 14 天'));
+  const chart = el('div', 'usage-chart');
+  days.forEach((d) => {
+    const v = byDay[d];
+    const h = Math.max(3, Math.round(((v.i + v.o) / maxDay) * 100));
+    const col = el('div', 'ucol');
+    col.title = `${d}\n输入 ${fmtNum(v.i)} · 输出 ${fmtNum(v.o)}\n${money(v.i, v.o)}`;
+    const bar = el('div', 'ubar');
+    bar.style.height = h + '%';
+    col.appendChild(bar);
+    col.appendChild(el('span', 'ulab', d.slice(5)));
+    chart.appendChild(col);
+  });
+  if (!days.length) chart.appendChild(el('div', 'note', '（还没有数据）'));
+  body.appendChild(chart);
+  body.appendChild(el('h4', 'usage-h', '按模型 / 模式'));
+  Object.keys(byModel).sort((a, b) => (byModel[b].i + byModel[b].o) - (byModel[a].i + byModel[a].o))
+    .forEach((k) => {
+      const v = byModel[k];
+      const row = el('div', 'urow');
+      row.appendChild(el('span', 'k', k));
+      row.appendChild(el('span', 'n', `${v.n} 条`));
+      row.appendChild(el('span', 'v', `${fmtNum(v.i)} / ${fmtNum(v.o)}`));
+      row.appendChild(el('span', 'm', money(v.i, v.o)));
+      body.appendChild(row);
+    });
+  body.appendChild(el('p', 'note',
+    `花费是估算（输入 ¥1/百万、输出 ¥2/百万），实际以 DeepSeek 账单为准；侧边栏那个余额才是真实的。`));
+}
+
+// ══════════════ 长文本粘贴转附件 ══════════════
+async function attachText(text, name) {
+  try {
+    const j = await (await apiFetch('/api/attach-text', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, name }),
+    })).json();
+    if (!j.ok) throw new Error(j.message);
+    state.attach.push(j);
+    renderChips();
+    toast(`粘贴的 ${fmtNum(text.length)} 字已转成附件，不占输入框`, 3200);
+  } catch (e) { toast('转附件失败：' + e.message, 3600); }
+}
+
 // ══════════════ 事件 ══════════════
 function bindEvents() {
   nodes.btnNew.addEventListener('click', () => { if (!state.streaming) newConversation(); });
@@ -1389,6 +1584,23 @@ function bindEvents() {
     else if (e.key === 'Enter') { e.preventDefault(); const it = palItems[palSel]; if (it) { closePalette(); it.act(); } }
   });
   nodes.palette.addEventListener('click', (e) => { if (e.target === nodes.palette) closePalette(); });
+  // git / 用量
+  nodes.btnGit.addEventListener('click', openGit);
+  nodes.gitClose.addEventListener('click', () => nodes.gitModal.classList.add('hidden'));
+  nodes.gitModal.addEventListener('click', (e) => { if (e.target === nodes.gitModal) nodes.gitModal.classList.add('hidden'); });
+  nodes.gitInit.addEventListener('click', () => gitAction('init'));
+  nodes.gitCommit.addEventListener('click', () => {
+    const m = prompt('提交说明：', 'webui: 改动 ' + new Date().toLocaleString('zh-CN').slice(0, 16));
+    if (m == null) return;
+    gitAction('commit', { message: m });
+  });
+  nodes.gitRestoreAll.addEventListener('click', () => {
+    if (!confirm('把所有改动还原成上一次提交的样子？\n（新加的文件会被删掉，改动会丢）')) return;
+    gitAction('restore');
+  });
+  nodes.btnUsage.addEventListener('click', openUsage);
+  nodes.usageClose.addEventListener('click', () => nodes.usageModal.classList.add('hidden'));
+  nodes.usageModal.addEventListener('click', (e) => { if (e.target === nodes.usageModal) nodes.usageModal.classList.add('hidden'); });
 
   nodes.input.addEventListener('input', autoGrow);
   nodes.input.addEventListener('keydown', (e) => {
@@ -1399,7 +1611,10 @@ function bindEvents() {
     const files = [];
     for (const it of (e.clipboardData && e.clipboardData.items) || [])
       if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); }
-    if (files.length) { e.preventDefault(); addFiles(files); }
+    if (files.length) { e.preventDefault(); addFiles(files); return; }
+    // 超长文本不要塞进输入框，直接转成附件（省得滚动半天，也不占输入区）
+    const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    if (text.length > 800) { e.preventDefault(); attachText(text); }
   });
   ['dragenter', 'dragover'].forEach((ev) => window.addEventListener(ev, (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
@@ -1425,6 +1640,8 @@ function bindEvents() {
     if (e.key === 'Escape') {
       if (!nodes.lightbox.classList.contains('hidden')) { nodes.lightbox.classList.add('hidden'); return; }
       if (!nodes.palette.classList.contains('hidden')) { closePalette(); return; }
+      if (!nodes.gitModal.classList.contains('hidden')) { nodes.gitModal.classList.add('hidden'); return; }
+      if (!nodes.usageModal.classList.contains('hidden')) { nodes.usageModal.classList.add('hidden'); return; }
       if (!nodes.settings.classList.contains('hidden')) { closeSettings(); return; }
       if (!nodes.keysModal.classList.contains('hidden')) { nodes.keysModal.classList.add('hidden'); return; }
       if (state.streaming && state.abort) { state.abort.abort(); return; }
@@ -1488,6 +1705,7 @@ async function boot() {
   syncMode();
   ensureLibs();
   loadTerminalSessions();     // 终端里跑过的会话，命令面板里可以直接接管
+  syncGitBadge();             // 顶栏显示工作目录有多少改动
   render();
   renderSidebar();
   autoGrow();
@@ -1496,6 +1714,16 @@ async function boot() {
   if (!cfg.has_key) banner('没有找到 API Key，发消息会失败。', '设置里可以填，或确认 ~/.claude/settings.json 里有 ANTHROPIC_AUTH_TOKEN');
   if (location.search.includes('panel=settings')) openSettings();
   if (location.search.includes('panel=palette')) openPalette();
+  if (location.search.includes('panel=git')) openGit();
+  if (location.search.includes('panel=usage')) openUsage();
+  // ?ws=<路径> 临时换工作目录（不改设置，方便瞄一眼别的目录）
+  const wsM = location.search.match(/[?&]ws=([^&]+)/);
+  if (wsM) {
+    state.settings.workspace = decodeURIComponent(wsM[1]);
+    nodes.setWorkspace.value = state.settings.workspace;
+    syncGitBadge();
+    if (!nodes.gitModal.classList.contains('hidden')) refreshGit();
+  }
   if (location.search.includes('theme=light')) { state.settings.theme = 'light'; applyTheme(); }
   if (location.search.includes('theme=dark')) { state.settings.theme = 'dark'; applyTheme(); }
   // 慢放 8 倍：网址后面加 ?slowmo=1 就能看清动效（确认动画到底有没有生效）

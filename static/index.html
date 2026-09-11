@@ -63,6 +63,8 @@
           <button class="seg-btn active" data-mode="chat">CHAT</button>
           <button class="seg-btn" data-mode="agent">AGENT</button>
         </div>
+        <button class="icon-btn git-btn" id="btnGit" title="看改动 / 回滚 / 提交"><span id="gitBadge" class="git-badge hidden"></span></button>
+        <button class="icon-btn" id="btnUsage" title="用量与花费"></button>
         <button class="icon-btn" id="btnPalette" title="命令面板 (Ctrl+K)">⌘K</button>
         <button class="icon-btn" id="btnExport" title="导出 Markdown">⤓</button>
       </div>
@@ -192,6 +194,32 @@
       <tr><td>拖文件进窗口</td><td>加为附件</td></tr>
       <tr><td>输入 <kbd>/</kbd></td><td>斜杠命令（/new /agent /model …）</td></tr>
     </table>
+  </div>
+</div>
+
+<!-- ══════════════ Git 改动 ══════════════ -->
+<div class="overlay hidden" id="gitModal">
+  <div class="modal">
+    <div class="modal-head"><b>改动</b><span class="note" id="gitHead"></span>
+      <button class="icon-btn" id="gitClose">✕</button></div>
+    <div class="modal-body">
+      <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+        <button class="mini" id="gitInit">git init（这样改动才能回滚）</button>
+        <button class="mini" id="gitCommit">提交全部</button>
+        <button class="mini danger" id="gitRestoreAll">全部还原</button>
+        <span class="note" id="gitMsg"></span>
+      </div>
+      <div class="git-list" id="gitList"></div>
+      <pre class="git-diff hidden" id="gitDiff"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ 用量 ══════════════ -->
+<div class="overlay hidden" id="usageModal">
+  <div class="modal">
+    <div class="modal-head"><b>用量与花费</b><button class="icon-btn" id="usageClose">✕</button></div>
+    <div class="modal-body" id="usageBody"></div>
   </div>
 </div>
 
