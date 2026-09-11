@@ -1425,7 +1425,9 @@ async function syncGitBadge() {
     updateGitBadge(j.is_repo ? (j.files || []).length : 0);
   } catch (e) { updateGitBadge(0); }
 }
+let gitSeq = 0;      // 防并发：两次刷新同时跑的话，只让最后一次的结果生效
 async function refreshGit() {
+  const my = ++gitSeq;
   const ws = state.settings.workspace || 'E:\\';
   if (nodes.gitWs) nodes.gitWs.value = ws;
   nodes.gitMsg.textContent = '读取中…';
@@ -1433,6 +1435,7 @@ async function refreshGit() {
   nodes.gitDiff.classList.add('hidden');
   try {
     const j = await (await apiFetch('/api/git?ws=' + encodeURIComponent(ws))).json();
+    if (my !== gitSeq) return;          // 有更新的一次请求在跑，这次作废（否则列表会重复）
     nodes.gitHead.textContent = ws;
     if (!j.is_repo) {
       nodes.gitMsg.textContent = j.message || '不是 git 仓库';

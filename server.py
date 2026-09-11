@@ -1226,7 +1226,9 @@ async def api_ping():
 # ==========================================================================
 def _git(args: List[str], cwd: str, timeout: int = 30) -> tuple[int, str]:
     try:
-        r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True,
+        # core.quotepath=false：不加这个，git 会把中文文件名转义成 \346\210\220 这种八进制
+        r = subprocess.run(["git", "-c", "core.quotepath=false"] + args,
+                           cwd=cwd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout,
                            creationflags=0x08000000 if sys.platform.startswith("win") else 0)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
@@ -1260,11 +1262,14 @@ async def api_git(ws: str = ""):
             continue
         st, path = line[:2].strip() or "??", line[3:].strip().strip('"')
         files.append({"status": st, "path": path})
-    _, log = await asyncio.to_thread(_git, ["log", "-1", "--format=%h %s"], str(p))
     # 有没有"存档点"（没有任何提交的仓库不能还原——还原等于把文件全删了）
     code_h, _ = await asyncio.to_thread(_git, ["rev-parse", "--verify", "HEAD"], str(p))
+    has_commits = code_h == 0
+    log = ""
+    if has_commits:
+        _, log = await asyncio.to_thread(_git, ["log", "-1", "--format=%h %s"], str(p))
     return {"ok": True, "is_repo": True, "ws": str(p), "branch": branch.strip(),
-            "files": files, "head": log.strip(), "has_commits": code_h == 0}
+            "files": files, "head": log.strip(), "has_commits": has_commits}
 
 
 @app.get("/api/git/diff")
