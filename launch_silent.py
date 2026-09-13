@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import socket
 import subprocess
@@ -18,11 +20,30 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-PORT_FILE = ROOT / "data" / "port.txt"
-DEFAULT_PORT = 80
-# 网址用 deepseek.localhost：浏览器把 *.localhost 当"安全上下文"，
-# 这样 PWA（装成 App / 离线秒开）才生效；deepseek.local 虽然也能解析但不算安全上下文（实测）
-PRETTY_HOST = "deepseek.localhost"
+
+
+def _find_cfg():
+    """配置文件的找法跟 server.py 完全一样（打包版在程序目录的上一级）"""
+    for cand in (os.environ.get("JY_CONFIG"),
+                 str(ROOT.parent / "config.json"),
+                 str(ROOT / "config.json")):
+        if cand and Path(cand).is_file():
+            with contextlib.suppress(Exception):
+                d = json.loads(Path(cand).read_text(encoding="utf-8-sig"))
+                if isinstance(d, dict):
+                    return Path(cand), d
+    return None, {}
+
+
+CONFIG_PATH, CFG = _find_cfg()
+DATA_DIR = Path(os.environ.get("JY_DATA_DIR")
+                or str(CFG.get("data_dir") or "").strip()
+                or str(ROOT / "data"))
+PORT_FILE = DATA_DIR / "port.txt"
+DEFAULT_PORT = int(CFG.get("port") or 80)
+# 网址用 *.localhost：浏览器把它当"安全上下文"，PWA（装成 App / 离线秒开）才生效；
+# 别的后缀（比如 deepseek.local）能解析但不算安全上下文（实测过）
+PRETTY_HOST = str(CFG.get("pretty_host") or "deepseek.localhost").strip() or "deepseek.localhost"
 
 
 def pretty_url(port: int) -> str:
@@ -62,6 +83,12 @@ def pythonw() -> str:
 
 
 def main() -> None:
+    # 干活模式的起始目录：顺手建出来（第一次跑就让它有个落脚点，不至于落到家目录乱翻）
+    ws = str((CFG.get("agent") or {}).get("workspace") or "").strip()
+    if ws:
+        with contextlib.suppress(Exception):
+            Path(ws).mkdir(parents=True, exist_ok=True)
+
     port = known_port()
     if alive(port):
         print(f"[silent] 服务已在 {port} 跑着，只开浏览器")
@@ -71,6 +98,9 @@ def main() -> None:
     print("[silent] 服务没在跑，后台拉起…")
     env = dict(os.environ)
     env["DSUI_SILENT"] = "1"                     # 让它把日志写文件
+    env["JY_DATA_DIR"] = str(DATA_DIR)           # 数据目录跟这里保持一致
+    if CONFIG_PATH:
+        env["JY_CONFIG"] = str(CONFIG_PATH)
     DETACHED = 0x00000008
     NOWINDOW = 0x08000000
     flags = DETACHED | NOWINDOW if os.name == "nt" else 0

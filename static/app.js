@@ -11,7 +11,14 @@ const LS_CUR  = 'dsui.current.v1';
 const DEFAULT_SETTINGS = {
   theme: 'dark', system: '', temperature: 0.7, max_tokens: 4096,
   enterSend: true, showThinking: true, lineNumbers: false,
-  model: 'deepseek-flash', workspace: 'E:\\', readonly: false, mode: 'chat',
+  // 余额进度条的"充值基准"：{amt 充值那刻的余额, ts, top 当时累计充值额, topup 这次充了多少}
+  // 没值时第一次读到余额会以当前余额起算（100%），以后一检测到余额上涨就自动重置
+  balBase: null,
+  // workspace 留空 = 用后端 config.json 里配的那个（打包版会配成她的"文档\工作区"）
+  // workspace：网页版**没有**"选工作区"这回事（用户明确要求删掉）——它是内部值，
+  // 只决定干活时的落脚点，界面不暴露。留空 = 用后端 config.json（打包版配成她的文档\工作区），
+  // 再留空 = E:\。记忆跟它无关（server.py 会自动把该目录的记忆接上共享记忆）。
+  model: 'deepseek-flash', workspace: '', readonly: false, mode: 'chat',
   useMemory: true,      // CHAT 模式是否带上长期记忆（跟终端共用那一份）
   animations: true,     // 界面动画（这台机器系统里动画是关的，所以自己管，不看 prefers-reduced-motion）
 };
@@ -84,9 +91,14 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const nodes = {
-  app: $('app'), side: $('side'), sideMask: $('sideMask'), btnSide: $('btnSide'),
+  app: $('app'), side: $('side'), sideMask: $('sideMask'), btnSide: $('btnSide'), brandName: $('brandName'),
   brandSub: $('brandSub'), btnNew: $('btnNew'), search: $('search'), convList: $('convList'),
   balText: $('balText'), balDot: $('balDot'), btnBalance: $('btnBalance'),
+  balBar: $('balBar'), balFill: $('balFill'), balPct: $('balPct'), balLbl: $('balLbl'),
+  balPop: $('balPop'), balBar2: $('balBar2'), balFill2: $('balFill2'),
+  balPopNum: $('balPopNum'), balPopCur: $('balPopCur'), balPopBadge: $('balPopBadge'),
+  balPopBase: $('balPopBase'), balPopWhen: $('balPopWhen'), balPopUsed: $('balPopUsed'),
+  balPopRefresh: $('balPopRefresh'), balPopReset: $('balPopReset'), balPopNote: $('balPopNote'),
   btnTheme: $('btnTheme'), btnSettings: $('btnSettings'), btnKeys: $('btnKeys'),
   convTitle: $('convTitle'), topMeta: $('topMeta'), modeSwitch: $('modeSwitch'),
   btnPalette: $('btnPalette'), btnExport: $('btnExport'),
@@ -98,16 +110,26 @@ const nodes = {
   settings: $('settings'), setClose: $('setClose'), setModel: $('setModel'), setTheme: $('setTheme'),
   setKey: $('setKey'), setKeyEye: $('setKeyEye'), keyNote: $('keyNote'), setBase: $('setBase'),
   setTemp: $('setTemp'), tempVal: $('tempVal'), setMax: $('setMax'), setSystem: $('setSystem'),
-  setWorkspace: $('setWorkspace'), setReadonly: $('setReadonly'), setLineNo: $('setLineNo'),
+  setProtocol: $('setProtocol'), modelList: $('modelList'),
+  setAgentBase: $('setAgentBase'), setAgentKey: $('setAgentKey'), setAgentModel: $('setAgentModel'),
+  setAgentEye: $('setAgentEye'), btnTestChat: $('btnTestChat'), btnTestAgent: $('btnTestAgent'),
+  btnClaudeUpdate: $('btnClaudeUpdate'), testNote: $('testNote'),
+  setup: $('setup'), suClose: $('suClose'), tplDeepseek: $('tplDeepseek'), tplOpenai: $('tplOpenai'),
+  tplAnthropic: $('tplAnthropic'), suProtocol: $('suProtocol'), suModel: $('suModel'),
+  suBase: $('suBase'), suKey: $('suKey'), suSame: $('suSame'), suAgentBox: $('suAgentBox'),
+  suAgentBase: $('suAgentBase'), suAgentKey: $('suAgentKey'), suAgentModel: $('suAgentModel'),
+  suAsr: $('suAsr'), suTestChat: $('suTestChat'),
+  suTestAgent: $('suTestAgent'), suNote: $('suNote'), suSave: $('suSave'),
+  setReadonly: $('setReadonly'), setLineNo: $('setLineNo'),
   setReason: $('setReason'), setEnter: $('setEnter'), btnOpenFolder: $('btnOpenFolder'),
   btnExportAll: $('btnExportAll'), aboutNote: $('aboutNote'),
   memPick: $('memPick'), memOpen: $('memOpen'), memEdit: $('memEdit'),
   memSave: $('memSave'), memNote: $('memNote'), setMemory: $('setMemory'),
   setMotion: $('setMotion'), onboard: $('onboard'), obClose: $('obClose'), btnAgain: $('btnAgain'),
-  skeleton: $('skeleton'),
   btnGit: $('btnGit'), gitBadge: $('gitBadge'), btnUsage: $('btnUsage'),
   btnSettingsTop: $('btnSettingsTop'),
   gitWs: $('gitWs'), gitWsSet: $('gitWsSet'),
+  gitWsNow: $('gitWsNow'), gitWsEdit: $('gitWsEdit'), gitWsRow: $('gitWsRow'),
   gitModal: $('gitModal'), gitClose: $('gitClose'), gitHead: $('gitHead'), gitMsg: $('gitMsg'),
   gitInit: $('gitInit'), gitCommit: $('gitCommit'), gitRestoreAll: $('gitRestoreAll'),
   gitList: $('gitList'), gitDiff: $('gitDiff'),
@@ -541,7 +563,7 @@ function buildMessageEl(msg) {
 
   // ---- AI ----
   const who = el('div', 'who');
-  who.appendChild(el('b', null, msg.agent ? 'claude code' : 'deepseek'));
+  who.appendChild(el('b', null, msg.agent ? 'claude code' : (state.brand || 'deepseek')));
   who.appendChild(el('span', null, timeAgo(msg.ts)));
   if (msg.agent) who.appendChild(el('span', null, '· AGENT'));
   body.appendChild(who);
@@ -900,6 +922,7 @@ async function runChat(conv, text) {
     setStreaming(false);
     if (asst.truncated) banner('回答被 max_tokens 截断了。', '思考过程也占额度，去设置里调大 max_tokens。');
     if (!err && !cText && mdEl) mdEl.innerHTML = '<p style="color:var(--faint)">（没有返回内容，可以重新生成）</p>';
+    refreshBalance(true, true);   // 刚花掉钱，立刻把余额/进度条更新一次（失败就悄悄算了）
     touchConv(conv);
     render();
   }
@@ -955,7 +978,8 @@ async function runAgent(conv, text, attachIds) {
           if (!line.startsWith('data:')) continue;
           const p = line.slice(5).trim(); if (!p) continue;
           let ev; try { ev = JSON.parse(p); } catch (e) { continue; }
-          if (ev.type === 'session') conv.agentSessionId = ev.session_id;
+          if (ev.type === 'run') { conv.agentRunId = ev.run_id; touchConv(conv); }
+          else if (ev.type === 'session') { conv.agentSessionId = ev.session_id; touchConv(conv); }
           else if (ev.type === 'thinking') {
             if (!thinkEl && state.settings.showThinking && n) {
               thinkEl = buildReasonEl('', true); thinkBody = thinkEl.body;
@@ -996,9 +1020,50 @@ async function runAgent(conv, text, attachIds) {
     setStreaming(false);
     if (!err && !cText && mdEl) mdEl.innerHTML = '<p style="color:var(--faint)">（这次没产出最终回答，看上面的工具卡片）</p>';
     touchConv(conv);
+    refreshBalance(true, true);   // 刚花掉钱，立刻把余额/进度条更新一次（失败就悄悄算了）
     syncGitBadge();     // AGENT 可能改了文件，刷新顶栏的改动数
     render();
   }
+}
+/** 停止当前生成：先叫后端真的把进程杀掉（刷新页面不算停止，只有点这里算） */
+function stopRunning() {
+  const c = currentConv();
+  if (c && c.agentRunId) {
+    apiFetch('/api/agent/stop', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: c.agentRunId }),
+    }).catch(() => {});
+  }
+  if (state.abort) state.abort.abort();
+}
+/** 刷新回来：刚才那个 agent 任务还在后台跑 / 刚跑完 → 把结果接回来填进气泡 */
+async function resumeAgentRun() {
+  const c = currentConv();
+  if (!c || !c.agentRunId) return;
+  const last = c.messages[c.messages.length - 1];
+  if (!last || last.role !== 'assistant' || last.done) return;
+  let tries = 0, said = false;
+  const tick = async () => {
+    let j = null;
+    try {
+      j = await (await apiFetch('/api/agent/result?run_id=' + encodeURIComponent(c.agentRunId))).json();
+    } catch (e) { return; }
+    if (!j || !j.ok || last.done) return;
+    if (!j.done) {                       // 还在跑：每 10 秒看一眼，最多看 30 分钟
+      if (tries++ < 180) {
+        if (!said) { said = true; toast('刚才那个任务还在后台跑，跑完我把结果填回来', 3600); }
+        setTimeout(tick, 10000);
+      }
+      return;
+    }
+    if (j.text) last.content = j.text;   // 跑完了：把最终回答填回气泡
+    if (j.usage) last.agentUsage = j.usage;
+    if (j.session_id && !c.agentSessionId) c.agentSessionId = j.session_id;
+    last.done = true;
+    touchConv(c); render();
+    if (j.text) toast('✅ 刚才那个任务跑完了，结果已填回来', 4000);
+  };
+  tick();
 }
 function toolSummary(name, input) {
   if (!input || typeof input !== 'object') return '';
@@ -1070,7 +1135,7 @@ async function addFiles(files) {
 
 // ══════════════ 斜杠命令 ══════════════
 const SLASH = [
-  ['/settings', '打开设置（改工作目录、Key、模型…）'],
+  ['/settings', '打开设置（模型、Key、外观…）'],
   ['/new', '新建会话'], ['/agent', '切到干活模式'], ['/chat', '切回聊天模式'],
   ['/model', '切换模型，如 /model deepseek-v4-pro'], ['/clear', '清空当前会话'],
   ['/settings', '打开设置'], ['/attach', '按路径加附件'], ['/export', '导出 Markdown'],
@@ -1170,24 +1235,30 @@ function openSettings() {
 function closeSettings() { nodes.settings.classList.add('hidden'); }
 function fillSettings() {
   const cfg = state.config || {};
-  nodes.setModel.innerHTML = '';
-  (cfg.models || []).forEach((m) => {
-    const o = el('option', null, m.label || m.id); o.value = m.id; o.title = m.desc || '';
-    nodes.setModel.appendChild(o);
-  });
+  if (nodes.modelList) {
+    nodes.modelList.innerHTML = '';
+    (cfg.models || []).forEach((m) => {
+      const o = el('option'); o.value = m.id; o.label = m.desc || '';
+      nodes.modelList.appendChild(o);
+    });
+  }
   const c = currentConv();
   nodes.setModel.value = (c && c.model) || state.settings.model;
+  nodes.setProtocol.value = cfg.protocol || 'openai';
   nodes.setTheme.value = state.settings.theme === 'light' ? 'light' : 'dark';
   nodes.setKey.value = '';
   nodes.keyNote.textContent = cfg.has_key
     ? `当前已设置（来源：${cfg.key_source || '未知'}）· 留空不改，填了就覆盖`
     : '当前没有 Key，发消息会失败';
   nodes.setBase.value = cfg.base_url || '';
+  nodes.setAgentBase.value = cfg.agent_base_url || '';
+  nodes.setAgentModel.value = cfg.agent_model || '';
+  nodes.setAgentKey.value = '';
+  nodes.testNote.textContent = '';
   nodes.setTemp.value = state.settings.temperature;
   nodes.tempVal.textContent = Number(state.settings.temperature).toFixed(1);
   nodes.setMax.value = state.settings.max_tokens;
   nodes.setSystem.value = state.settings.system || '';
-  nodes.setWorkspace.value = state.settings.workspace || 'E:\\';
   nodes.setReadonly.checked = !!state.settings.readonly;
   nodes.setLineNo.checked = !!state.settings.lineNumbers;
   nodes.setReason.checked = !!state.settings.showThinking;
@@ -1195,7 +1266,10 @@ function fillSettings() {
   nodes.setMotion.checked = state.settings.animations !== false;
   nodes.setEnter.value = state.settings.enterSend ? 'send' : 'newline';
   const at = cfg.attach || {};
-  nodes.aboutNote.textContent = `v${cfg.version || '?'} · 附件上限 ${fmtNum(at.max_chars || 0)} 字/次 · 语音转写 ${at.asr ? '可用' : '不可用'} · 视频处理 ${at.ffmpeg ? '可用' : '不可用'} · 干活模式 ${cfg.agent_ready ? '就绪' : '未找到 claude'}`;
+  nodes.aboutNote.textContent = `v${cfg.version || '?'} · 接口 ${cfg.protocol === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容'}`
+    + ` · 附件上限 ${fmtNum(at.max_chars || 0)} 字/次 · 语音转写 ${at.asr ? '可用' : '不可用'}`
+    + ` · 视频处理 ${at.ffmpeg ? '可用' : '不可用'} · 干活模式 ${cfg.agent_ready ? '就绪' : '未找到 claude'}`
+    + (cfg.data_dir ? ` · 数据在 ${cfg.data_dir}` : '');
 }
 function bindSettings() {
   nodes.setClose.addEventListener('click', closeSettings);
@@ -1208,6 +1282,7 @@ function bindSettings() {
     state.settings.model = nodes.setModel.value;
     if (c) { c.model = nodes.setModel.value; touchConv(c); }
     saveSettings(); syncTop();
+    if (nodes.setModel.value.trim()) pushIface();     // 顺手存到后端 config.json
   });
   nodes.setTheme.addEventListener('change', () => {
     state.settings.theme = nodes.setTheme.value; saveSettings(); applyTheme();
@@ -1221,13 +1296,9 @@ function bindSettings() {
     nodes.setMax.value = state.settings.max_tokens; saveSettings();
   });
   nodes.setSystem.addEventListener('input', () => { state.settings.system = nodes.setSystem.value; saveSettings(); });
-  nodes.setWorkspace.addEventListener('change', () => {
-    const v = (nodes.setWorkspace.value || '').trim() || 'E:\\';
-    nodes.setWorkspace.value = v; state.settings.workspace = v; saveSettings(); toast('起始目录：' + v);
-  });
   nodes.setReadonly.addEventListener('change', () => {
     state.settings.readonly = nodes.setReadonly.checked; saveSettings();
-    toast(nodes.setReadonly.checked ? '只读模式：只能看不能改' : '完全模式：可改文件、跑命令');
+    toast(nodes.setReadonly.checked ? '只读模式：只能看不能改' : '全自动：可改文件、可跑命令');
   });
   nodes.setLineNo.addEventListener('change', () => { state.settings.lineNumbers = nodes.setLineNo.checked; saveSettings(); render(); });
   nodes.setReason.addEventListener('change', () => { state.settings.showThinking = nodes.setReason.checked; saveSettings(); render(); });
@@ -1258,17 +1329,111 @@ function bindSettings() {
     state.settings.onboarded = true;
     saveSettings();
   });
-  const saveKey = async () => {
-    const body = { base_url: nodes.setBase.value.trim() };
-    if (nodes.setKey.value.trim()) body.api_key = nodes.setKey.value.trim();
+  // 接口那一段改动 → 立刻存到后端 config.json（Key 不回显：填了才发过去）
+  const pushIface = async () => {
+    const body = {
+      chat: {
+        protocol: nodes.setProtocol.value,
+        base_url: nodes.setBase.value.trim(),
+        model: nodes.setModel.value.trim(),
+        api_key: nodes.setKey.value.trim(),
+      },
+      agent: {
+        base_url: nodes.setAgentBase.value.trim(),
+        model: nodes.setAgentModel.value.trim(),
+        api_key: nodes.setAgentKey.value.trim(),
+      },
+    };
     const j = await (await apiFetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).json();
-    state.config = Object.assign(state.config || {}, { has_key: j.has_key, key_source: j.key_source, base_url: j.base_url });
-    nodes.setKey.value = ''; fillSettings(); toast(j.message || '已保存', 3200);
+    state.config = Object.assign(state.config || {}, {
+      has_key: j.has_key, key_source: j.key_source, base_url: j.base_url,
+      protocol: j.protocol, default_model: j.model, workspace: j.workspace,
+      agent_base_url: nodes.setAgentBase.value.trim() || (state.config || {}).agent_base_url,
+      agent_model: nodes.setAgentModel.value.trim() || (state.config || {}).agent_model,
+    });
+    nodes.setKey.value = ''; nodes.setAgentKey.value = '';
+    fillSettings();
+    toast(j.message || '已保存', 3200);
   };
-  nodes.setKey.addEventListener('change', saveKey);
-  nodes.setBase.addEventListener('change', saveKey);
+  nodes.setKey.addEventListener('change', pushIface);
+  nodes.setBase.addEventListener('change', pushIface);
+  nodes.setProtocol.addEventListener('change', pushIface);
+  nodes.setAgentBase.addEventListener('change', pushIface);
+  nodes.setAgentModel.addEventListener('change', pushIface);
+  nodes.setAgentKey.addEventListener('change', pushIface);
+  nodes.setAgentEye.addEventListener('click', () => {
+    nodes.setAgentKey.type = nodes.setAgentKey.type === 'password' ? 'text' : 'password';
+  });
+  nodes.btnTestChat.addEventListener('click', () => testIface('chat'));
+  nodes.btnTestAgent.addEventListener('click', () => testIface('agent'));
+  nodes.btnClaudeUpdate.addEventListener('click', claudeUpdate);
+}
+
+/** 检查/更新干活模式自带的 claude（走国内镜像，不碰被墙的官方更新域名） */
+async function claudeUpdate() {
+  const note = nodes.testNote;
+  note.style.color = '';
+  note.textContent = '正在查最新版本…';
+  try {
+    const j = await (await apiFetch('/api/claude-update')).json();
+    if (!j.ok) { note.textContent = '❌ ' + (j.message || '查询失败'); note.style.color = 'var(--red)'; return; }
+    if (!j.has_update) {
+      note.textContent = j.message ? `当前 ${j.current || '?'}（${j.message}）` : `已是最新：${j.current}`;
+      return;
+    }
+    if (!confirm(`发现新版本 ${j.latest}（当前 ${j.current}）。\n\n现在下载并更新吗？\n· 约 100MB，走国内镜像，一般十几秒\n· 正在干活的要先停下；纯聊天不受影响\n· 旧版会留一份备份`)) return;
+    note.textContent = `正在下载 ${j.latest} …（约 100MB，别关页面）`;
+    const r = await (await apiFetch('/api/claude-update', { method: 'POST' })).json();
+    note.textContent = (r.ok ? '✅ ' : '❌ ') + (r.message || '');
+    note.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+  } catch (e) {
+    note.textContent = '❌ ' + e.message;
+    note.style.color = 'var(--red)';
+  }
+}
+
+/** 干活模式该用哪个地址：填了就用填的；没填但聊天是 DeepSeek 官方，就自动加 /anthropic */
+function guessAgentBase(protocol) {
+  const b = (nodes.setBase.value || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  if (/\/anthropic$/.test(b)) return b;
+  if (b.includes('api.deepseek.com')) return b + '/anthropic';
+  return protocol === 'anthropic' ? b : '';
+}
+
+/** 「测一下」按钮：拿当前填的参数真发一次最小请求，通不通立刻知道 */
+async function testIface(kind, noteEl, src) {
+  const note = noteEl || nodes.testNote;
+  const pick = src || {
+    protocol: () => nodes.setProtocol.value,
+    base: () => nodes.setBase.value,
+    key: () => nodes.setKey.value,
+    model: () => nodes.setModel.value,
+    agentBase: () => nodes.setAgentBase.value,
+    agentKey: () => nodes.setAgentKey.value,
+    agentModel: () => nodes.setAgentModel.value,
+  };
+  note.style.color = '';
+  note.textContent = '正在试…（要连网，最多等十几秒）';
+  const body = kind === 'agent'
+    ? { protocol: 'anthropic',
+        base_url: pick.agentBase().trim() || guessAgentBase(pick.protocol()),
+        api_key: pick.agentKey().trim() || pick.key().trim(),
+        model: pick.agentModel().trim() }
+    : { protocol: pick.protocol(), base_url: pick.base().trim(),
+        model: pick.model().trim(), api_key: pick.key().trim() };
+  try {
+    const j = await (await apiFetch('/api/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    note.textContent = (j.ok ? '✅ ' : '❌ ') + (j.message || '') + (j.hint ? ' —— ' + j.hint : '');
+    note.style.color = j.ok ? 'var(--green)' : 'var(--red)';
+  } catch (e) {
+    note.textContent = '❌ 连不上本地服务：' + e.message;
+    note.style.color = 'var(--red)';
+  }
 }
 
 // ══════════════ 导出 ══════════════
@@ -1281,7 +1446,7 @@ function convToMarkdown(c) {
       (m.attach || []).forEach((a) => L.push(`[附件：${a.name}]`));
       L.push(m.content || '', '');
     } else if (m.content) {
-      L.push('## ◉ DeepSeek', '');
+      L.push('## ◉ ' + (state.brand || 'DeepSeek'), '');
       if (m.reasoning) L.push('<details><summary>思考过程</summary>', '', m.reasoning, '', '</details>', '');
       L.push(m.content, '');
     }
@@ -1324,15 +1489,118 @@ function syncMode() {
   nodes.modeSwitch.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
   nodes.input.placeholder = m === 'agent' ? '让它干什么…（比如：把 E:\\xxx 里的脚本报错修好）' : '问点什么…（Enter 发送，Shift+Enter 换行）';
 }
-async function refreshBalance(fresh) {
-  nodes.balText.textContent = '余额…';
+async function refreshBalance(fresh, quiet) {
+  // quiet = 后台自动刷新：失败/没数据时保持原样，别把界面刷成报错
   try {
     const j = await (await apiFetch('/api/balance' + (fresh ? '?fresh=1' : ''))).json();
-    if (!j.ok) { nodes.balDot.className = 'dot bad'; nodes.balText.textContent = j.message || '读取失败'; return; }
+    if (!j.ok) {
+      if (quiet) return;
+      paintBalance(null);
+      // 中转站基本都没有余额接口 → 直接把余额那一条藏起来，别每次都报个错
+      if (/404|接口地址不对|not\s*found/i.test((j.message || '') + (j.hint || ''))) {
+        nodes.btnBalance.classList.add('hidden');
+        return;
+      }
+      nodes.balDot.className = 'dot bad'; nodes.balText.textContent = j.message || '读取失败'; return;
+    }
     const v = parseFloat(j.total);
-    nodes.balDot.className = 'dot ' + (!j.is_available || v <= 0 ? 'bad' : v < 10 ? 'low' : 'ok');
-    nodes.balText.textContent = `余额 ${j.currency} ${j.total}`;
-  } catch (e) { nodes.balDot.className = 'dot bad'; nodes.balText.textContent = '余额读取失败'; }
+    // ⚠️ 接口里的 topped_up 不是"累计充值"，是**余额里来自充值的那部分**（total = 充值部分 + 赠送部分），
+    //    它会随消费一起降。所以只能拿它当"充值了没"的信号，不能当累计额显示（标错过一次）
+    const cum = parseFloat(j.topped_up);
+    if (!isFinite(v)) {
+      paintBalance(null);
+      nodes.balDot.className = 'dot bad';
+      nodes.balText.textContent = `余额 ${j.currency || ''} ${j.total}`;
+      return;
+    }
+    // —— 充值基准：充一次就重新充满（这就是"每次充多少 R 开始往下算"）——
+    // 判据优先用官方给的"累计充值额"涨没涨；拿不到就退回"余额变多了"= 充值了
+    const now = Date.now();
+    let base = state.settings.balBase;
+    const cumUp = isFinite(cum) && base && typeof base.top === 'number' && cum > base.top + 0.001;
+    const moneyUp = base && typeof base.amt === 'number' && base.amt > 0 && v > base.amt + 0.01;
+    if (!base || typeof base.amt !== 'number' || base.amt <= 0) {
+      base = { amt: v, ts: now, top: isFinite(cum) ? cum : null, topup: null };
+      state.settings.balBase = base; saveSettings();
+    } else if (cumUp || moneyUp) {
+      base = { amt: v, ts: now, top: isFinite(cum) ? cum : null, topup: cumUp ? cum - base.top : null };
+      state.settings.balBase = base; saveSettings();
+      // 充值金额不报数字：万一是"关页期间充的、已经花掉一点"，算出来的数会偏小，不如不报
+      toast(`检测到充值 → 进度条重新满格（基准 ${money(v, j.currency)}）`, 4500);
+    }
+    // —— 百分比 + 画进度条 ——
+    let pct = Math.round((v / base.amt) * 100);
+    const fake = new URLSearchParams(location.search).get('bal');   // ?bal=37 预览某个百分比
+    if (fake && isFinite(parseFloat(fake))) pct = parseFloat(fake);
+    pct = Math.max(0, Math.min(100, pct));
+    nodes.balDot.className = 'dot '
+      + (!j.is_available || v <= 0 ? 'bad' : pct >= 50 ? 'ok' : pct >= 20 ? 'low' : 'bad');
+    nodes.balText.textContent = '';   // 只显示百分比（金额进悬停提示，侧栏再窄也不截断）
+    const when = base.ts ? new Date(base.ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '';
+    nodes.btnBalance.title = '点一下看余额明细';
+    if (nodes.balPopNum) {          // 左键弹出的明细卡片
+      nodes.balPopNum.textContent = Number(v).toFixed(2);
+      nodes.balPopCur.textContent = symOf(j.currency);
+      nodes.balPopBase.textContent = money(base.amt, j.currency);
+      nodes.balPopWhen.textContent = when || '今天';
+      nodes.balPopUsed.textContent = money(Math.max(0, base.amt - v), j.currency);
+      nodes.balPopNote.textContent = '每次充值后自动回到 100%';
+    }
+    paintBalance(pct);
+  } catch (e) {
+    if (quiet) return;
+    paintBalance(null); nodes.balDot.className = 'dot bad'; nodes.balText.textContent = '余额读取失败';
+  }
+}
+
+function symOf(cur) { return cur === 'CNY' ? '¥' : cur === 'USD' ? '$' : (cur || '') + ' '; }
+function money(v, cur) { return symOf(cur) + Number(v).toFixed(2); }
+
+let balPainted = false;   // 是否已经画过一次（第一次不走过渡动画，见下面）
+
+// 把百分比画到进度条上（侧栏那条 + 卡片里那条一起画）。
+// pct 传 null = 这次没有余额可显示（进度条和百分比都收起来）
+function paintBalance(pct) {
+  const bars = [[nodes.balBar, nodes.balFill], [nodes.balBar2, nodes.balFill2]];
+  if (pct == null || !isFinite(pct)) {
+    bars.forEach(([b]) => { if (b) b.classList.add('hidden'); });
+    if (nodes.balPct) nodes.balPct.textContent = '';
+    if (nodes.balLbl) nodes.balLbl.textContent = '';
+    return;
+  }
+  const lv = pct >= 50 ? 'lv-ok' : pct >= 20 ? 'lv-mid' : 'lv-low';
+  const w = pct <= 0 ? '0%' : Math.max(3, pct) + '%';
+  bars.forEach(([b, f]) => {
+    if (!b || !f) return;
+    if (!b.dataset.base) b.dataset.base = b.classList.contains('lg') ? 'balbar lg' : 'balbar';
+    b.className = b.dataset.base + ' ' + lv;      // 重新拼 class，顺带去掉 hidden
+    if (balPainted) {
+      f.style.width = w;                          // 之后的变化：平滑过去（好看）
+    } else {
+      // 第一次：直接到位。否则页面刚打开那 0.55 秒里进度条是空的（看着像坏了）
+      const t = f.style.transition;
+      f.style.transition = 'none';
+      f.style.width = w;
+      void f.offsetWidth;                         // 强制回流，让上面的 none 生效
+      f.style.transition = t || '';
+    }
+  });
+  balPainted = true;
+  if (nodes.balPct) { nodes.balPct.className = 'balpct ' + lv; nodes.balPct.textContent = pct + '%'; }
+  if (nodes.balLbl) nodes.balLbl.textContent = '剩余';
+  if (nodes.balPopBadge) { nodes.balPopBadge.className = 'bp-badge ' + lv; nodes.balPopBadge.textContent = pct + '%'; }
+}
+
+function openBalPop() {
+  nodes.balPop.classList.remove('hidden');
+  refreshBalance(true, true);      // 打开就顺手刷一次（这样"点开就是最新的"）
+}
+function closeBalPop() { nodes.balPop.classList.add('hidden'); }
+function resetBalBase() {
+  if (!confirm('把"充值基准"重设为当前余额？\n（进度条回到 100%，之后照常递减）')) return;
+  state.settings.balBase = null;
+  saveSettings();
+  refreshBalance(true, true);
 }
 
 // ══════════════ 长期记忆（跟终端共用同一份） ══════════════
@@ -1430,6 +1698,7 @@ async function refreshGit() {
   const my = ++gitSeq;
   const ws = state.settings.workspace || 'E:\\';
   if (nodes.gitWs) nodes.gitWs.value = ws;
+  if (nodes.gitWsNow) nodes.gitWsNow.textContent = ws;
   nodes.gitMsg.textContent = '读取中…';
   nodes.gitList.innerHTML = '';
   nodes.gitDiff.classList.add('hidden');
@@ -1606,12 +1875,24 @@ function bindEvents() {
   nodes.btnKeys.addEventListener('click', () => nodes.keysModal.classList.remove('hidden'));
   nodes.btnPalette.addEventListener('click', () => openPalette());
   nodes.btnExport.addEventListener('click', (e) => exportCurrent(e.shiftKey ? 'txt' : 'md'));
-  nodes.btnBalance.addEventListener('click', () => refreshBalance(true));
+  // 左键 = 开/关余额明细卡片（打开时顺手刷新一次）；右键 = 直接重设基准（后门）
+  nodes.btnBalance.addEventListener('click', () => {
+    if (nodes.balPop.classList.contains('hidden')) openBalPop(); else closeBalPop();
+  });
+  nodes.btnBalance.addEventListener('contextmenu', (e) => { e.preventDefault(); resetBalBase(); });
+  nodes.balPopRefresh.addEventListener('click', () => refreshBalance(true));
+  nodes.balPopReset.addEventListener('click', resetBalBase);
+  // 点别的地方 = 收起卡片（点按钮自己不算，交给上面那个 handler）
+  document.addEventListener('click', (e) => {
+    if (nodes.balPop.classList.contains('hidden')) return;
+    if (nodes.balPop.contains(e.target) || nodes.btnBalance.contains(e.target)) return;
+    closeBalPop();
+  });
   nodes.btnAttach.addEventListener('click', () => nodes.fileInput.click());
   nodes.fileInput.addEventListener('change', () => { addFiles(nodes.fileInput.files); nodes.fileInput.value = ''; });
   nodes.modeSwitch.querySelectorAll('.seg-btn').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
   nodes.btnSend.addEventListener('click', () => send());
-  nodes.btnStop.addEventListener('click', () => { if (state.abort) state.abort.abort(); });
+  nodes.btnStop.addEventListener('click', () => stopRunning());
   nodes.search.addEventListener('input', () => { state.search = nodes.search.value; renderSidebar(); });
   nodes.convTitle.addEventListener('change', () => {
     const c = currentConv(); if (!c) return;
@@ -1629,14 +1910,20 @@ function bindEvents() {
   // git / 用量
   nodes.btnGit.addEventListener('click', openGit);
   nodes.btnSettingsTop.addEventListener('click', openSettings);
-  // git 面板里直接换工作目录（省得去设置里翻）
+  // Git 目录：平时只显示一行当前目录，点「改」才展开输入框
+  // （这不是"选工作区"——只是 git 需要一个路径才能工作，记忆跟它无关）
+  nodes.gitWsEdit.addEventListener('click', () => {
+    nodes.gitWsRow.classList.remove('hidden');
+    nodes.gitWs.value = state.settings.workspace || 'E:\\';
+    nodes.gitWs.focus();
+  });
   nodes.gitWsSet.addEventListener('click', () => {
     const v = (nodes.gitWs.value || '').trim();
     if (!v) { toast('先填一个文件夹路径，比如 E:\\git练习'); return; }
     state.settings.workspace = v;
     saveSettings();
-    nodes.setWorkspace.value = v;
-    toast('工作目录已换成：' + v);
+    nodes.gitWsRow.classList.add('hidden');
+    toast('Git 目录已换成：' + v);
     refreshGit();
     syncGitBadge();
   });
@@ -1691,7 +1978,7 @@ function bindEvents() {
     }
     if (ctrl && e.shiftKey && e.key.toLowerCase() === 'e') { e.preventDefault(); exportCurrent('md'); return; }
     if (ctrl && e.key.toLowerCase() === 'c' && state.streaming && !String(getSelection() || '').length) {
-      e.preventDefault(); if (state.abort) state.abort.abort(); return;
+      e.preventDefault(); stopRunning(); return;
     }
     if (e.key === 'Escape') {
       if (!nodes.lightbox.classList.contains('hidden')) { nodes.lightbox.classList.add('hidden'); return; }
@@ -1701,12 +1988,117 @@ function bindEvents() {
       if (!nodes.usageModal.classList.contains('hidden')) { nodes.usageModal.classList.add('hidden'); return; }
       if (!nodes.settings.classList.contains('hidden')) { closeSettings(); return; }
       if (!nodes.keysModal.classList.contains('hidden')) { nodes.keysModal.classList.add('hidden'); return; }
-      if (state.streaming && state.abort) { state.abort.abort(); return; }
+      if (!nodes.balPop.classList.contains('hidden')) { closeBalPop(); return; }
+      if (state.streaming && state.abort) { stopRunning(); return; }
       closeSide();
     }
   });
   window.addEventListener('resize', () => { if (window.innerWidth > 860) closeSide(); });
   window.addEventListener('beforeunload', (e) => { if (state.streaming) { e.preventDefault(); e.returnValue = ''; } });
+}
+
+// ══════════════ 接口配置向导（给不熟 API 的人：填三个空、点一下测试、保存） ══════════════
+function applyBrand() {
+  const b = (state.config && state.config.brand) || 'deepseek';
+  state.brand = b;
+  document.title = `${b} · 本地工作台`;
+  const mt = document.querySelector('meta[name=apple-mobile-web-app-title]');
+  if (mt) mt.setAttribute('content', b);
+  if (nodes.brandName) nodes.brandName.textContent = b;
+  const obT = document.querySelector('#onboard .ob-head b');
+  if (obT) obT.textContent = `欢迎使用 ${b} 本地工作台`;
+}
+function openSetup() { nodes.setup.classList.remove('hidden'); fillSetup(); }
+function closeSetup() { nodes.setup.classList.add('hidden'); }
+function syncSetupAgentBox() { nodes.suAgentBox.classList.toggle('hidden', nodes.suSame.checked); }
+function fillSetup() {
+  const cfg = state.config || {};
+  nodes.suProtocol.value = cfg.protocol || 'openai';
+  nodes.suBase.value = cfg.base_url || '';
+  nodes.suModel.value = cfg.default_model || 'deepseek-flash';
+  nodes.suAgentBase.value = cfg.agent_base_url || '';
+  nodes.suAgentModel.value = cfg.agent_model || '';
+  nodes.suKey.value = ''; nodes.suAgentKey.value = ''; nodes.suAsr.value = '';
+  nodes.suNote.style.color = '';
+  nodes.suNote.textContent = cfg.has_key
+    ? `已经配过了（来源：${cfg.key_source || '未知'}）。留空 = 不改，填了 = 覆盖。`
+    : '还没有 API —— 填完点右下角「保存并开始用」就行';
+  syncSetupAgentBox();
+}
+function pickTemplate(kind) {
+  nodes.suNote.style.color = '';
+  if (kind === 'deepseek') {
+    nodes.suProtocol.value = 'openai';
+    nodes.suBase.value = 'https://api.deepseek.com';
+    nodes.suModel.value = 'deepseek-flash';
+    nodes.suAgentBase.value = 'https://api.deepseek.com/anthropic';
+    nodes.suAgentModel.value = 'deepseek-flash[1M]';
+    nodes.suSame.checked = true;
+    nodes.suNote.textContent = '去 platform.deepseek.com 充值 → 左侧「API keys」建一个，粘到下面，就齐了';
+  } else if (kind === 'openai') {
+    nodes.suProtocol.value = 'openai';
+    nodes.suSame.checked = false;
+    nodes.suNote.textContent = '照中转站给的填：地址一般是 https://xxx/v1 这种，模型名也照抄';
+  } else {
+    nodes.suProtocol.value = 'anthropic';
+    nodes.suSame.checked = true;
+    nodes.suNote.textContent = '照中转站给的填：地址填到域名（或在 /v1 之前截断），模型名照抄';
+  }
+  syncSetupAgentBox();
+}
+async function saveSetup() {
+  const cfg = state.config || {};
+  const chat = {
+    protocol: nodes.suProtocol.value,
+    base_url: nodes.suBase.value.trim(),
+    model: nodes.suModel.value.trim(),
+    api_key: nodes.suKey.value.trim(),
+  };
+  const agent = {
+    base_url: nodes.suSame.checked
+      ? (nodes.suAgentBase.value.trim() || guessAgentBase(nodes.suProtocol.value))
+      : nodes.suAgentBase.value.trim(),
+    model: nodes.suAgentModel.value.trim(),
+    api_key: nodes.suSame.checked ? '' : nodes.suAgentKey.value.trim(),
+  };
+  if (!chat.base_url) { nodes.suNote.textContent = '❌ 先把「接口地址」填上'; nodes.suNote.style.color = 'var(--red)'; return; }
+  if (!chat.api_key && !cfg.has_key) { nodes.suNote.textContent = '❌ 聊天那把 Key 必须填一个'; nodes.suNote.style.color = 'var(--red)'; return; }
+  nodes.suNote.style.color = '';
+  nodes.suNote.textContent = '保存中…';
+  const body = { chat, agent };
+  if (nodes.suAsr.value.trim()) body.asr_key = nodes.suAsr.value.trim();
+  try {
+    const j = await (await apiFetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    if (!j.ok) { nodes.suNote.textContent = '❌ ' + (j.message || '保存失败'); nodes.suNote.style.color = 'var(--red)'; return; }
+    state.config = await (await apiFetch('/api/config')).json();
+    applyBrand();
+    if (chat.model) state.settings.model = chat.model;
+    saveSettings(); syncTop();
+    closeSetup();
+    toast('配好了，直接开问就行', 3600);
+    if (!state.settings.onboarded) setTimeout(() => nodes.onboard.classList.remove('hidden'), 700);
+  } catch (e) {
+    nodes.suNote.textContent = '❌ 保存失败：' + e.message;
+    nodes.suNote.style.color = 'var(--red)';
+  }
+}
+function bindSetup() {
+  const pick = {
+    protocol: () => nodes.suProtocol.value, base: () => nodes.suBase.value, key: () => nodes.suKey.value,
+    model: () => nodes.suModel.value, agentBase: () => nodes.suAgentBase.value,
+    agentKey: () => nodes.suAgentKey.value, agentModel: () => nodes.suAgentModel.value,
+  };
+  nodes.suClose.addEventListener('click', closeSetup);
+  nodes.setup.addEventListener('click', (e) => { if (e.target === nodes.setup) closeSetup(); });
+  nodes.tplDeepseek.addEventListener('click', () => pickTemplate('deepseek'));
+  nodes.tplOpenai.addEventListener('click', () => pickTemplate('openai'));
+  nodes.tplAnthropic.addEventListener('click', () => pickTemplate('anthropic'));
+  nodes.suSame.addEventListener('change', syncSetupAgentBox);
+  nodes.suTestChat.addEventListener('click', () => testIface('chat', nodes.suNote, pick));
+  nodes.suTestAgent.addEventListener('click', () => testIface('agent', nodes.suNote, pick));
+  nodes.suSave.addEventListener('click', saveSetup);
 }
 
 // ══════════════ 错误兜底 ══════════════
@@ -1741,6 +2133,11 @@ async function boot() {
     if (cfg.system_prompt) state.settings.system = cfg.system_prompt;
     if (cfg.default_model) state.settings.model = cfg.default_model;
   }
+  // 网页版删掉了"选择工作区"：没值时固定 E:\（或后端 config.json 配的）；
+  // 顺手把练 git 时留下的旧值换掉——用户不该再被这个值绊到
+  if (!state.settings.workspace || state.settings.workspace === 'E:\\git练习') {
+    state.settings.workspace = cfg.workspace || 'E:\\';
+  }
   saveSettings();
 
   state.convs = lsGet(LS_CONV, []);
@@ -1757,8 +2154,19 @@ async function boot() {
 
   initIcons();
   applyMotion();
-  bindSettings();
-  bindEvents();
+  applyBrand();
+  // 绑定界面事件：**任何一块出错都不许拖垮整个页面**。
+  // 实测踩过：浏览器缓存里是旧版 app.js、页面是新版 HTML → 旧代码要绑的元素已经没了
+  // → 抛 Cannot read properties of null → boot 中断 → 整页不可用（F5 才能恢复）。
+  // 现在出错就记一笔继续跑（后端已经用 no-cache + ?v= 版本号堵住了错配的来源，这里是兜底）。
+  const bindFailed = [];
+  [bindSettings, bindSetup, bindEvents].forEach((fn) => {
+    try { fn(); } catch (e) { bindFailed.push(fn.name); console.error('[绑定失败]', fn.name, e); }
+  });
+  if (bindFailed.length) {
+    banner('界面没能完全加载（' + bindFailed.join('、') + '）',
+      '按 F5 刷新一下就好；还不好就双击桌面图标重启服务。');
+  }
   syncMode();
   ensureLibs();
   loadTerminalSessions();     // 终端里跑过的会话，命令面板里可以直接接管
@@ -1767,11 +2175,21 @@ async function boot() {
   renderSidebar();
   autoGrow();
   refreshBalance(false);
+  // 余额自动更新（用户要求"不用手动点"）：每 60 秒一次（页面在后台就跳过），
+  // 切回标签页立刻更一次；每句话答完也会更（在 sendChat / runAgent 的 finally 里）。
+  // 后端自己还有 60 秒缓存兜着，别怕请求太密。
+  setInterval(() => { if (!document.hidden) refreshBalance(true, true); }, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshBalance(false, true);
+  });
   focusInput();
-  if (!cfg.has_key) banner('没有找到 API Key，发消息会失败。', '设置里可以填，或确认 ~/.claude/settings.json 里有 ANTHROPIC_AUTH_TOKEN');
-  // 首次使用引导（只看一次；设置里可以再看。加 ?nohelp=1 可跳过，方便截图/排查）
+  // 没配 API → 直接弹配置向导（不认识 API 的人照着填就行）
+  // 配好了 → 只在第一次弹使用引导（加 ?nohelp=1 跳过；?setup=1 强制打开向导）
   if (location.search.includes('nohelp=1')) state.settings.onboarded = true;
-  if (!state.settings.onboarded) setTimeout(() => nodes.onboard.classList.remove('hidden'), 400);
+  // 只有后端明确说"没配 Key"才弹向导；配置没读到（服务没起/请求失败）不许乱弹，
+  // 否则会莫名其妙让人填一堆东西，还显得像"必须先填工作区才能用"
+  if (cfg.has_key === false || location.search.includes('setup=1')) setTimeout(openSetup, 400);
+  else if (!state.settings.onboarded) setTimeout(() => nodes.onboard.classList.remove('hidden'), 400);
   // PWA：注册 service worker（只在安全上下文 = localhost / *.localhost / https 里生效；
   // 用 127.0.0.1 之外的 IP 访问时浏览器会拒绝，这里静默降级，不影响使用）
   if ('serviceWorker' in navigator) {
@@ -1790,11 +2208,14 @@ async function boot() {
   if (location.search.includes('panel=palette')) openPalette();
   if (location.search.includes('panel=git')) openGit();
   if (location.search.includes('panel=usage')) openUsage();
+  if (location.search.includes('panel=balance')) openBalPop();
+  // 刷新回来：刚才那个 agent 任务还在后台跑 / 刚跑完 → 把结果接回来
+  resumeAgentRun();
+
   // ?ws=<路径> 临时换工作目录（不改设置，方便瞄一眼别的目录）
   const wsM = location.search.match(/[?&]ws=([^&]+)/);
   if (wsM) {
     state.settings.workspace = decodeURIComponent(wsM[1]);
-    nodes.setWorkspace.value = state.settings.workspace;
     syncGitBadge();
     if (!nodes.gitModal.classList.contains('hidden')) refreshGit();
   }
@@ -1818,10 +2239,13 @@ async function boot() {
       const m = document.querySelector('.main');
       const si = nodes.streamInner;
       const cs = si ? getComputedStyle(si) : null;
-      const ind = nodes.convList.querySelector('.conv-ind');
-      document.title = `PROBE vw=${innerWidth} main=${m ? m.offsetWidth : -1} inner=${si.offsetWidth} `
+      const ind = nodes.convList ? nodes.convList.querySelector('.conv-ind') : null;
+      // 哪些 nodes.X 取不到元素 = 页面和脚本版本对不上（历史坑，一眼就能看出是哪个）
+      const nul = Object.keys(nodes).filter((k) => !nodes[k]);
+      document.title = `PROBE null=${nul.length ? nul.join(',') : 'none'} `
+        + `vw=${innerWidth} main=${m ? m.offsetWidth : -1} inner=${si ? si.offsetWidth : -1} `
         + `motion=${!document.documentElement.classList.contains('no-motion')} `
-        + `anim=${cs && cs.animationName}/${cs && cs.animationDuration} enter=${si.classList.contains('enter')} `
+        + `anim=${cs && cs.animationName}/${cs && cs.animationDuration} enter=${si ? si.classList.contains('enter') : -1} `
         + `ind=${ind ? Math.round(ind.offsetTop) + '+' + Math.round(ind.offsetHeight) : 'none'} `
         + `sw=${window.__sw || 'none'}`;
       // 顺手做一次写操作自检（真浏览器会带 Origin 头，这正是之前踩坑的地方）

@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # 让中文在 Windows 控制台里不乱码、不因为编码问题崩掉
@@ -53,13 +53,50 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # --------------------------------------------------------------------------
 # 路径
+#   config.json 从三个地方找（先找到的算）：
+#     1. 环境变量 JY_CONFIG 指的路径
+#     2. 程序目录的上一级（打包版：%LOCALAPPDATA%\Jingyu\config.json
+#        —— 放在程序目录外面，重装/升级都不会把配置和聊天记录冲掉）
+#     3. 程序目录里（开发时就是仓库根目录）
+#   数据目录（会话/图片/日志）跟着 config.json 的 data_dir 走，默认在程序目录下的 data/。
 # --------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
-DATA_DIR = ROOT / "data"
+VENDOR_DIR = STATIC_DIR / "vendor"
+
+
+def _read_json(p: Path) -> Dict[str, Any]:
+    # utf-8-sig：别人用记事本另存为时可能带上 BOM，带上也能正常读
+    try:
+        d = json.loads(Path(p).read_text(encoding="utf-8-sig"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _find_config_file() -> Path:
+    for cand in (os.environ.get("JY_CONFIG"),
+                 str(ROOT.parent / "config.json"),
+                 str(ROOT / "config.json")):
+        if cand and Path(cand).is_file():
+            return Path(cand)
+    return ROOT / "config.json"          # 还没有也算它（保存时就写到这里）
+
+
+CONFIG_FILE = _find_config_file()
+_RAW_CONF: Dict[str, Any] = _read_json(CONFIG_FILE)
+
+DATA_DIR = Path(
+    os.environ.get("JY_DATA_DIR")
+    or str(_RAW_CONF.get("data_dir") or "").strip()
+    # 没写 data_dir 就按"配置文件在哪"来定：
+    #   config.json 在程序目录外面（打包版：%LOCALAPPDATA%\Jingyu\config.json）
+    #   → 数据就放它旁边，卸载程序不会连带删掉聊天记录
+    #   开发时（config 在仓库里）→ 还是放程序目录下的 data\
+    or (str(CONFIG_FILE.parent / "data") if CONFIG_FILE.parent != ROOT else str(ROOT / "data"))
+).expanduser()
 CONV_DIR = DATA_DIR / "conversations"
 IMG_DIR = DATA_DIR / "images"
-VENDOR_DIR = STATIC_DIR / "vendor"
 for _d in (DATA_DIR, CONV_DIR, IMG_DIR, VENDOR_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
@@ -74,12 +111,15 @@ if os.environ.get("DSUI_SILENT") == "1":
         sys.stdout = _log
         sys.stderr = _log
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_SYSTEM_PROMPT = "你是 DeepSeek，一个乐于助人、回答准确的中文 AI 助手。回答用简体中文，代码要能直接运行。"
+DEFAULT_BRAND = "deepseek"                  # 界面上的名字（打包给别人的那份用 config.json 改成"鲸语"）
+DEFAULT_PRETTY_HOST = "deepseek.localhost"  # 好看网址（*.localhost 才是浏览器眼里的"安全上下文"）
+DEFAULT_SYSTEM_PROMPT = "你是一个乐于助人、回答准确的中文 AI 助手。回答用简体中文，代码要能直接运行。"
 
-# 可用模型。vision=True 表示能读图(2026-09-11 实测:flash 能,pro 不能)
-AVAILABLE_MODELS = [
+# 内置模型清单（DeepSeek 官方）。vision=True 表示能读图(2026-09-11 实测:flash 能,pro 不能)。
+# config.json 里给了 "models" 就用它，方便换成中转站的模型名。
+DEFAULT_MODELS = [
     {
         "id": "deepseek-flash",
         "label": "deepseek-flash",
@@ -101,65 +141,90 @@ SAFE_IMG = re.compile(r"^[A-Za-z0-9_-]{1,72}\.(?:png|jpe?g|webp|gif)$", re.I)
 
 
 # --------------------------------------------------------------------------
-# 配置:API Key 从哪来
-#   优先级 1. 环境变量 DEEPSEEK_API_KEY
-#          2. 本文件夹的 config.json 里的 "api_key"
-#          3. 自动复用 Claude Code 的配置 ~/.claude/settings.json 里的 ANTHROPIC_AUTH_TOKEN
-#             (同一个 DeepSeek 账号,不用你手动再填一遍)
+# 配置：把 config.json + 环境变量 + Claude Code 的 settings.json 合成一份
+#
+# 新格式（打包给别人的那份 / 网页设置向导写出来的就是这种）：
+#   {
+#     "brand": "鲸语",
+#     "pretty_host": "jingyu.localhost",
+#     "chat":  { "protocol": "openai",            // openai | anthropic
+#                "base_url": "https://api.deepseek.com",
+#                "api_key": "sk-xxx", "model": "deepseek-flash" },
+#     "agent": { "base_url": "https://api.deepseek.com/anthropic",
+#                "api_key": "sk-xxx", "model": "deepseek-flash[1M]",
+#                "workspace": "C:\\Users\\me\\Documents\\鲸语工作区" },
+#     "asr_key": "",          // 可选：语音转文字（硅基流动）
+#     "memory_dir": ""        // 可选：长期记忆目录；留空 = 用本机终端那套
+#   }
+# 老的平铺格式（"api_key" / "base_url" / "model" 直接写在最外层）也照样认。
 # --------------------------------------------------------------------------
-def _read_claude_code_key() -> Optional[str]:
-    p = Path.home() / ".claude" / "settings.json"
-    try:
-        cfg = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+def _claude_code_env() -> Dict[str, str]:
+    """读 ~/.claude/settings.json 里 env 那一段（本机一直靠它拿 Key）"""
+    cfg = _read_json(Path.home() / ".claude" / "settings.json")
     env = cfg.get("env") or {}
-    for k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"):
-        v = env.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
+    return {k: v.strip() for k, v in env.items() if isinstance(v, str) and v.strip()}
 
 
 def load_config() -> Dict[str, Any]:
-    conf: Dict[str, Any] = {
-        "base_url": DEFAULT_BASE_URL,
-        "model": "deepseek-flash",
-        "temperature": 0.7,
-        "max_tokens": 4096,
-        "system_prompt": DEFAULT_SYSTEM_PROMPT,
-        "host": "127.0.0.1",
-        "port": 80,          # 80 → 网址就是干净的 http://deepseek.local（占用会自动往后找）
-    }
+    raw = dict(_RAW_CONF)
+    cce = _claude_code_env()
 
-    f = ROOT / "config.json"
-    if f.exists():
-        try:
-            user_conf = json.loads(f.read_text(encoding="utf-8"))
-            if isinstance(user_conf, dict):
-                conf.update({k: v for k, v in user_conf.items() if v is not None})
-        except Exception as e:
-            print(f"[config] config.json 读不了,已忽略: {e}")
+    chat = dict(raw.get("chat") or {})
+    agent = dict(raw.get("agent") or {})
+    for k in ("base_url", "api_key", "model"):        # 老的平铺写法 → chat
+        if not chat.get(k) and isinstance(raw.get(k), str):
+            chat[k] = raw[k]
 
-    # --- API Key 三级查找 ---
-    key, source = "", ""
+    chat["protocol"] = "anthropic" if str(chat.get("protocol") or "").lower() == "anthropic" else "openai"
+    chat["base_url"] = str(chat.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+    chat["model"] = str(chat.get("model") or "deepseek-flash")
+
+    # --- Key 三级查找：环境变量 > config.json > Claude Code 的 settings.json ---
+    key, source = str(chat.get("api_key") or "").strip(), ""
+    if key:
+        source = "config.json（网页设置里填的）"
     env_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
     if env_key:
         key, source = env_key, "环境变量 DEEPSEEK_API_KEY"
-    elif isinstance(conf.get("api_key"), str) and conf["api_key"].strip():
-        key, source = conf["api_key"].strip(), "config.json"
-    else:
-        ck = _read_claude_code_key()
+    elif not key:
+        ck = cce.get("ANTHROPIC_AUTH_TOKEN") or cce.get("ANTHROPIC_API_KEY") or ""
         if ck:
             key, source = ck, "自动复用 Claude Code 的 Key (~/.claude/settings.json)"
+    chat["api_key"] = key
 
-    conf["api_key"] = key
-    conf["key_source"] = source
+    # --- 干活模式（Claude Code）自己那一套地址/Key ---
+    # 留空就什么都不设：让 claude 去读它自己的 ~/.claude/settings.json（本机就是这种）
+    agent = {
+        "base_url": str(agent.get("base_url") or "").strip().rstrip("/"),
+        "api_key": str(agent.get("api_key") or "").strip(),
+        "model": str(agent.get("model") or "").strip(),
+        "workspace": str(agent.get("workspace") or raw.get("workspace") or "").strip(),
+    }
+
+    conf: Dict[str, Any] = {
+        "brand": str(raw.get("brand") or DEFAULT_BRAND).strip() or DEFAULT_BRAND,
+        "pretty_host": str(raw.get("pretty_host") or DEFAULT_PRETTY_HOST).strip() or DEFAULT_PRETTY_HOST,
+        "host": str(raw.get("host") or "127.0.0.1"),
+        "port": int(raw.get("port") or 80),
+        "temperature": float(raw.get("temperature") or 0.7),
+        "max_tokens": int(raw.get("max_tokens") or 4096),
+        "system_prompt": str(raw.get("system_prompt") or DEFAULT_SYSTEM_PROMPT),
+        "asr_key": str(raw.get("asr_key") or "").strip(),
+        "memory_dir": str(raw.get("memory_dir") or "").strip(),
+        "chat": chat,
+        "agent": agent,
+        # 老代码直接读这几个顶层字段，留着省得各处都改
+        "api_key": key, "key_source": source,
+        "base_url": chat["base_url"], "model": chat["model"],
+    }
+    if isinstance(raw.get("models"), list) and raw["models"]:
+        conf["models"] = raw["models"]
     return conf
 
 
 CONFIG = load_config()
-_have_key = bool(CONFIG["api_key"])
+AVAILABLE_MODELS: List[Dict[str, Any]] = CONFIG.get("models") or DEFAULT_MODELS
+_have_key = bool(CONFIG["chat"]["api_key"])
 
 
 # --------------------------------------------------------------------------
@@ -229,23 +294,49 @@ async def lifespan(app: FastAPI):
     )
     app.state.balance_cache = {"ts": 0.0, "data": None}
     print("=" * 62)
-    print(f"  DeepSeek 本地聊天 UI  v{VERSION}")
+    print(f"  {CONFIG['brand']} 本地工作台  v{VERSION}")
     print(f"  项目目录 : {ROOT}")
-    print(f"  API 地址 : {CONFIG['base_url']}")
-    print(f"  API Key  : {'已就绪 <- ' + CONFIG['key_source'] if _have_key else '*** 没有找到 API Key ***'}")
-    print(f"  模型     : {', '.join(m['id'] for m in AVAILABLE_MODELS)}")
+    print(f"  配置文件 : {CONFIG_FILE}")
+    print(f"  数据目录 : {DATA_DIR}")
+    print(f"  聊天接口 : {CONFIG['chat']['base_url']}  [{CONFIG['chat']['protocol']}]  模型 {CONFIG['chat']['model']}")
+    print(f"  聊天 Key : {'已就绪 <- ' + CONFIG['key_source'] if _have_key else '*** 没有找到 API Key ***'}")
+    _ag = CONFIG["agent"]
+    print(f"  干活接口 : {_ag['base_url'] or '(用 Claude Code 自己的配置)'}  "
+          f"{'Key 已就绪' if _ag['api_key'] else ''}  模型 {_ag['model'] or '(跟随 Claude Code 配置)'}")
+    print(f"  claude   : {CLAUDE_BIN or '*** 没找到 claude 命令 ***'}")
     print("=" * 62)
     if not _have_key:
-        print("[!] 没找到 API Key。三种解决办法(任选一种):")
-        print("    1) 在 config.json 里填 \"api_key\": \"sk-xxxxxx\"")
+        print("[!] 还没有配 API Key —— 打开网页会直接弹出设置向导，或者：")
+        print("    1) 在 config.json 里填 \"chat\": {\"api_key\": \"sk-xxxxxx\"}")
         print("    2) 设置环境变量 DEEPSEEK_API_KEY")
         print("    3) 确认 ~/.claude/settings.json 里有 ANTHROPIC_AUTH_TOKEN")
+    # 打包版第一次跑的时候，把手配的工作目录先建出来（不然要等第一次干活才建）
+    _ws = CONFIG["agent"]["workspace"]
+    if _ws:
+        with contextlib.suppress(Exception):
+            Path(_ws).mkdir(parents=True, exist_ok=True)
     yield
     await app.state.client.aclose()
 
 
+class NoCacheStaticFiles(StaticFiles):
+    """静态文件永远"回源校验"，不许浏览器自己拿缓存里的旧副本。
+
+    默认的 StaticFiles 不发 Cache-Control，浏览器就按"启发式缓存"自己算有效期
+    （≈ 文件年龄的 10%，可能是好几个小时）。于是会出现：index.html 已经换成新版，
+    app.js 还在用缓存里的旧版 → 旧代码找不到新页面里的元素 →
+    界面报 "Cannot read properties of null"（用户 2026-09-13 报过，F5 才能好）。
+    加了 no-cache 后每次都带 ETag 回源问一句，没改就 304，本地几乎零成本。
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 app = FastAPI(title="DeepSeek 本地聊天 UI", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # --------------------------------------------------------------------------
 # 防盗用令牌
@@ -301,7 +392,27 @@ async def index():
     if not f.exists():
         return JSONResponse({"error": "static/index.html 不见了,文件不完整"},
                             status_code=500)
-    return FileResponse(str(f), media_type="text/html; charset=utf-8")
+    return _index_response()
+
+
+def _index_response() -> Response:
+    """发 index.html，并给里面的 app.js / style.css 自动加上版本号（取文件修改时间）。
+
+    为什么必须这么做：浏览器缓存按"网址"存。网址不变，它就可能拿旧的 app.js；
+    而 index.html 本身改了（比如加/删了某个元素）→ 出现"新页面 + 旧脚本"，
+    脚本找不到元素就报 Cannot read properties of null，整页卡住，F5 才好。
+    现在代码一改，?v= 跟着变 → 浏览器被逼着重新下载，新旧错配从根上不可能发生。
+    """
+    newest = 0.0
+    for name in ("app.js", "style.css", "index.html"):
+        with contextlib.suppress(Exception):
+            newest = max(newest, (STATIC_DIR / name).stat().st_mtime)
+    ver = str(int(newest)) or "0"
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = re.sub(r'((?:src|href)="/static/(?:app\.js|style\.css))"',
+                  rf'\1?v={ver}"', html)
+    return Response(html, media_type="text/html; charset=utf-8",
+                    headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/favicon.ico")
@@ -312,23 +423,62 @@ async def favicon():
     return JSONResponse({}, status_code=404)
 
 
+def _reload_config() -> None:
+    """改完 config.json 后重新加载（CONFIG 原地更新，别处拿着的引用照样有效）"""
+    global _RAW_CONF, AVAILABLE_MODELS, _have_key
+    _RAW_CONF = _read_json(CONFIG_FILE)
+    fresh = load_config()
+    CONFIG.clear()
+    CONFIG.update(fresh)
+    AVAILABLE_MODELS = CONFIG.get("models") or DEFAULT_MODELS
+    _have_key = bool(CONFIG["chat"]["api_key"])
+
+
+def _save_raw_conf(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """把 updates 合并进 config.json（chat / agent 这两段是深层合并）"""
+    cur = _read_json(CONFIG_FILE)
+    for k, v in updates.items():
+        if isinstance(v, dict) and isinstance(cur.get(k), dict):
+            cur[k] = {**cur[k], **v}
+        else:
+            cur[k] = v
+    for sec in ("chat", "agent"):        # 别在文件里留一堆空字符串
+        if isinstance(cur.get(sec), dict):
+            cur[sec] = {k: v for k, v in cur[sec].items() if v not in (None, "")}
+            if not cur[sec]:
+                cur.pop(sec)
+    with contextlib.suppress(Exception):
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cur
+
+
 @app.get("/api/config")
 async def api_config():
-    """告诉前端:有哪些模型、默认参数是什么、Key 有没有准备好。"""
+    """告诉前端:品牌、有哪些模型、Key 有没有准备好、干活模式能不能用。"""
+    ag = CONFIG["agent"]
     return {
         "version": VERSION,
+        "brand": CONFIG["brand"],
         "token": TOKEN,          # 前端拿它来带请求头；跨域网站读不到这个响应
         "agent_ready": bool(CLAUDE_BIN),
+        "agent_configured": bool(ag["base_url"] and ag["api_key"]) or bool(_claude_code_env().get("ANTHROPIC_BASE_URL")),
+        "agent_model": ag["model"],
+        "agent_base_url": ag["base_url"],
         "claude_bin": CLAUDE_BIN,
         "models": AVAILABLE_MODELS,
         "default_model": CONFIG["model"],
+        "protocol": CONFIG["chat"]["protocol"],
         "temperature": CONFIG["temperature"],
         "max_tokens": CONFIG["max_tokens"],
         "system_prompt": CONFIG["system_prompt"],
         "has_key": _have_key,
         "key_source": CONFIG["key_source"],
         "base_url": CONFIG["base_url"],
+        "workspace": ag["workspace"],
         "data_dir": str(DATA_DIR),
+        "config_file": str(CONFIG_FILE),
+        "memory_enabled": bool(CONFIG["memory_dir"]) and Path(CONFIG["memory_dir"]).is_dir(),
         "vendor_ready": (VENDOR_DIR / "marked.min.js").exists(),
         # 附件能力自检，好让界面直接告诉用户"哪些能用"
         "attach": {
@@ -342,48 +492,208 @@ async def api_config():
 
 @app.post("/api/settings")
 async def api_settings(request: Request):
-    """API Key / Base URL 存到服务端 config.json —— 浏览器永远不持有明文。"""
-    global _have_key
+    """写设置到 config.json（Key 永远不下发给浏览器，浏览器只能知道"配没配好"）。
+
+    两种写法都收：
+      · 老的平铺：{api_key, base_url, clear_key}          ← 设置面板里的快捷修改
+      · 新的分段：{chat:{...}, agent:{...}, asr_key, brand} ← 首启向导
+    """
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
 
-    f = ROOT / "config.json"
-    cur: Dict[str, Any] = {}
-    if f.exists():
-        with contextlib.suppress(Exception):
-            cur = json.loads(f.read_text(encoding="utf-8"))
-    changed = []
+    upd: Dict[str, Any] = {}
+    changed: List[str] = []
 
+    def put(sec: str, k: str, v: Any) -> None:
+        upd.setdefault(sec, {})[k] = v
+
+    # —— 老写法 ——
+    if isinstance(body.get("base_url"), str) and body["base_url"].strip():
+        put("chat", "base_url", body["base_url"].strip())
+        changed.append("接口地址已更新")
     if body.get("clear_key"):
-        cur.pop("api_key", None)
-        ck = _read_claude_code_key()
-        CONFIG["api_key"] = ck or ""
-        CONFIG["key_source"] = ("自动复用 Claude Code 的 Key" if ck else "")
-        changed.append("已清除 Key")
+        put("chat", "api_key", "")
+        changed.append("已清除聊天 Key")
     elif isinstance(body.get("api_key"), str) and body["api_key"].strip():
-        v = body["api_key"].strip()
-        cur["api_key"] = v
-        CONFIG["api_key"] = v
-        CONFIG["key_source"] = "网页设置里填的（存在 config.json）"
-        changed.append("Key 已更新")
+        put("chat", "api_key", body["api_key"].strip())
+        changed.append("聊天 Key 已更新")
         if (os.environ.get("DEEPSEEK_API_KEY") or "").strip():
             changed.append("⚠ 但环境变量 DEEPSEEK_API_KEY 优先级更高，会盖过这里")
+    if body.get("clear_agent_key"):
+        put("agent", "api_key", "")
+        changed.append("已清除干活 Key")
 
-    if isinstance(body.get("base_url"), str):
-        v = body["base_url"].strip() or DEFAULT_BASE_URL
-        cur["base_url"] = v
-        CONFIG["base_url"] = v
-        changed.append("Base URL 已更新")
+    # —— 新写法（分段）——
+    for sec, label in (("chat", "聊天"), ("agent", "干活")):
+        patch = body.get(sec)
+        if isinstance(patch, dict):
+            clean = {k: (v.strip() if isinstance(v, str) else v)
+                     for k, v in patch.items() if isinstance(v, (str, int, float))}
+            clean = {k: v for k, v in clean.items() if v != ""}    # 空 = 不改
+            if clean:
+                upd.setdefault(sec, {}).update(clean)
+                changed.append(f"{label}设置已更新")
+    for k in ("asr_key", "brand", "memory_dir", "pretty_host"):
+        if isinstance(body.get(k), str) and body[k].strip():
+            upd[k] = body[k].strip()
+            changed.append(f"{k} 已更新")
+    if isinstance(body.get("models"), list) and body["models"]:
+        upd["models"] = body["models"]
+        changed.append("模型清单已更新")
 
-    with contextlib.suppress(Exception):
-        f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
-    _have_key = bool(CONFIG["api_key"])
+    _save_raw_conf(upd)
+    _reload_config()
     print(f"[settings] {'；'.join(changed) or '无变化'} -> has_key={_have_key}")
     return {"ok": True, "message": "；".join(changed) or "无变化",
             "has_key": _have_key, "key_source": CONFIG["key_source"],
-            "base_url": CONFIG["base_url"]}
+            "base_url": CONFIG["base_url"], "protocol": CONFIG["chat"]["protocol"],
+            "model": CONFIG["model"], "workspace": CONFIG["agent"]["workspace"]}
+
+
+def _anthropic_url(base: str) -> str:
+    """把用户填的地址拼成 Anthropic 的 /v1/messages（填了 /v1 结尾也不会拼成 /v1/v1）"""
+    b = (base or "").rstrip("/")
+    if b.endswith("/v1"):
+        b = b[:-3]
+    return b + "/v1/messages"
+
+
+def _guess_anthropic_base(chat_base: str) -> str:
+    """只知道聊天地址（OpenAI 那边）时，猜一下干活模式（Anthropic）该用哪个地址。
+       DeepSeek 官方是同一个域名 + /anthropic；已经是 /anthropic 结尾的就别再加一遍。"""
+    b = (chat_base or "").rstrip("/")
+    if not b:
+        return ""
+    if b.endswith("/anthropic"):
+        return b
+    if "api.deepseek.com" in b:
+        return b + "/anthropic"
+    return ""
+
+
+def _to_anthropic_messages(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把我们内部的（OpenAI 形状的）消息转成 Anthropic 的 content blocks"""
+    out: List[Dict[str, Any]] = []
+    for m in msgs:
+        c = m.get("content")
+        if isinstance(c, str):
+            out.append({"role": m["role"], "content": [{"type": "text", "text": c}]})
+            continue
+        blocks: List[Dict[str, Any]] = []
+        for p in (c or []):
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") == "text" and p.get("text"):
+                blocks.append({"type": "text", "text": p["text"]})
+            elif p.get("type") == "image_url":
+                url = ((p.get("image_url") or {}).get("url") or "")
+                mm = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.+)$", url, re.S)
+                if mm:
+                    blocks.append({"type": "image", "source": {
+                        "type": "base64", "media_type": mm.group(1), "data": mm.group(2)}})
+        if blocks:
+            out.append({"role": m["role"], "content": blocks})
+    # Anthropic 要求 user/assistant 交替出现，连续的同一角色要合并
+    merged: List[Dict[str, Any]] = []
+    for m in out:
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1]["content"] = merged[-1]["content"] + m["content"]
+        else:
+            merged.append(m)
+    return merged
+
+
+async def _pump_anthropic(j: Dict[str, Any], queue: "asyncio.Queue", acc: Dict[str, Any]) -> None:
+    """把 Anthropic 的事件翻译成前端要的那几种（和 OpenAI 分支输出保持一模一样）"""
+    t = j.get("type")
+    if t == "content_block_delta":
+        d = j.get("delta") or {}
+        if d.get("type") == "thinking_delta" and d.get("thinking"):
+            await queue.put({"type": "reasoning", "text": d["thinking"]})
+        elif d.get("text"):
+            await queue.put({"type": "content", "text": d["text"]})
+    elif t == "message_start":
+        u = ((j.get("message") or {}).get("usage")) or {}
+        if u.get("input_tokens"):
+            acc["prompt_tokens"] = u["input_tokens"]
+    elif t == "message_delta":
+        u = j.get("usage") or {}
+        if u.get("output_tokens"):
+            acc["completion_tokens"] = u["output_tokens"]
+        sr = (j.get("delta") or {}).get("stop_reason")
+        if sr:
+            await queue.put({"type": "finish", "reason": "length" if sr == "max_tokens" else sr})
+    elif t == "error":
+        e = j.get("error") or {}
+        await queue.put({"type": "error", "code": "upstream",
+                         "message": f"接口报错：{e.get('message') or '未知'}",
+                         "hint": str(e.get("type") or "")[:200]})
+    # Anthropic 的输入/输出 token 是分两次来的，攒成一条 usage 发（前端直接显示总数）
+    if t in ("message_delta", "message_stop") and (acc["prompt_tokens"] or acc["completion_tokens"]):
+        await queue.put({"type": "usage", "usage": {
+            "prompt_tokens": acc["prompt_tokens"],
+            "completion_tokens": acc["completion_tokens"],
+            "total_tokens": acc["prompt_tokens"] + acc["completion_tokens"],
+        }})
+
+
+@app.post("/api/test")
+async def api_test(request: Request):
+    """「测试连接」按钮：拿这组参数真发一次最小的请求，通不通立刻知道。
+
+    body: {protocol: "openai"|"anthropic", base_url, api_key, model}
+    key/地址留空就用已经存好的那份。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    protocol = "anthropic" if str(body.get("protocol") or "").lower() == "anthropic" else "openai"
+    ag, ch = CONFIG["agent"], CONFIG["chat"]
+    # 填了就用填的；没填就退回已经存好的那份（Anthropic 那边没配就用聊天那把 Key —— 同一个账号通常通用）
+    base = str(body.get("base_url") or "").strip().rstrip("/") or \
+        ((ag["base_url"] or _guess_anthropic_base(ch["base_url"]))
+         if protocol == "anthropic" else ch["base_url"])
+    key = str(body.get("api_key") or "").strip() or \
+        ((ag["api_key"] or ch["api_key"]) if protocol == "anthropic" else ch["api_key"])
+    model = str(body.get("model") or "").strip() or \
+        ((ag["model"] or ch["model"]) if protocol == "anthropic" else ch["model"]) or "deepseek-flash"
+    if not base:
+        return {"ok": False, "message": "还没填接口地址"}
+    if not key:
+        return {"ok": False, "message": "还没填 Key（干活模式也要一把 Anthropic 兼容的 Key）"}
+
+    t0 = time.time()
+    try:
+        if protocol == "anthropic":
+            headers = {"x-api-key": key, "Authorization": f"Bearer {key}",
+                       "anthropic-version": "2023-06-01", "content-type": "application/json"}
+            r = await app.state.client.post(
+                _anthropic_url(base), headers=headers, timeout=60.0,
+                json={"model": model, "max_tokens": 64,
+                      "messages": [{"role": "user", "content": "只回答两个字：可以"}]})
+        else:
+            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            r = await app.state.client.post(
+                base + "/chat/completions", headers=headers, timeout=60.0,
+                json={"model": model, "max_tokens": 64, "stream": False,
+                      "messages": [{"role": "user", "content": "只回答两个字：可以"}]})
+        ms = int((time.time() - t0) * 1000)
+        if r.status_code != 200:
+            _, msg, hint = humanize_error(r.status_code, r.text)
+            return {"ok": False, "message": f"接口拒绝了这个 Key/模型：{msg}", "hint": hint, "ms": ms}
+        d = r.json()
+        if protocol == "anthropic":
+            txt = "".join(x.get("text") or "" for x in (d.get("content") or []) if isinstance(x, dict))
+        else:
+            txt = ((d.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return {"ok": True, "ms": ms, "model": d.get("model") or model,
+                "message": f"通了！{ms}ms · 模型 {d.get('model') or model} 回了「{txt.strip()[:20]}」"}
+    except Exception as e:
+        _, msg, hint = network_error(e)
+        return {"ok": False, "message": msg, "hint": hint}
 
 
 @app.get("/api/balance")
@@ -550,9 +860,9 @@ async def api_chat(request: Request):
             yield 'data: {"type":"done"}\n\n'
         return StreamingResponse(_empty(), media_type="text/event-stream")
 
-    model = body.get("model") or CONFIG["model"]
-    valid_ids = [m["id"] for m in AVAILABLE_MODELS]
-    if model not in valid_ids:
+    # 模型名不再卡死在内置清单里（中转站的模型名千奇百怪），只要不是空/超长就放行
+    model = str(body.get("model") or CONFIG["model"]).strip() or CONFIG["model"]
+    if len(model) > 120:
         model = CONFIG["model"]
     try:
         temperature = float(body.get("temperature", CONFIG["temperature"]))
@@ -565,13 +875,6 @@ async def api_chat(request: Request):
     except Exception:
         max_tokens = 4096
 
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": up_msgs,
-        "stream": True,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
     system = (body.get("system") or "").strip()
     # 记忆注入：CHAT 模式本来"不认识"用户，把记忆索引塞进 system 就接上了
     if body.get("memory"):
@@ -581,15 +884,38 @@ async def api_chat(request: Request):
                 "【关于这个用户的长期记忆（来自他本机的记忆库，请直接当作已知事实使用，"
                 "不要复述这段、也不要说你读了记忆文件）】\n" + mem
             )
-    if system:
-        payload["messages"] = [{"role": "system", "content": system}] + up_msgs
 
-    url = CONFIG["base_url"].rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {CONFIG['api_key']}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
+    # 两种协议：OpenAI 兼容（DeepSeek 官方那种）和 Anthropic 兼容（中转站 / Claude 那套）
+    anthropic = CONFIG["chat"]["protocol"] == "anthropic"
+    if anthropic:
+        payload: Dict[str, Any] = {
+            "model": model, "stream": True, "temperature": temperature,
+            "max_tokens": max_tokens, "messages": _to_anthropic_messages(up_msgs),
+        }
+        if system:
+            payload["system"] = system        # Anthropic 的 system 是顶层参数，不是一条消息
+        url = _anthropic_url(CONFIG["chat"]["base_url"])
+        headers = {
+            # 两种鉴权头都带上：x-api-key 是 Anthropic 原生，Bearer 是中转站常见写法
+            "x-api-key": CONFIG["chat"]["api_key"],
+            "Authorization": f"Bearer {CONFIG['chat']['api_key']}",
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+    else:
+        payload = {
+            "model": model, "stream": True, "temperature": temperature,
+            "max_tokens": max_tokens, "messages": up_msgs,
+        }
+        if system:
+            payload["messages"] = [{"role": "system", "content": system}] + up_msgs
+        url = CONFIG["chat"]["base_url"].rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {CONFIG['chat']['api_key']}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
 
     # 统计真正发出去的图片数（含附件带来的扫描件页/视频帧），别只看 m["images"]
     n_img = 0
@@ -597,8 +923,8 @@ async def api_chat(request: Request):
         c = m.get("content")
         if isinstance(c, list):
             n_img += sum(1 for p in c if isinstance(p, dict) and p.get("type") == "image_url")
-    print(f"[chat] model={model} msgs={len(up_msgs)} imgs={n_img} "
-          f"temp={temperature} max_tokens={max_tokens}")
+    print(f"[chat] protocol={'anthropic' if anthropic else 'openai'} model={model} "
+          f"msgs={len(up_msgs)} imgs={n_img} temp={temperature} max_tokens={max_tokens}")
 
     client: httpx.AsyncClient = app.state.client
     queue: asyncio.Queue = asyncio.Queue(maxsize=512)
@@ -615,6 +941,7 @@ async def api_chat(request: Request):
                                      "message": msg, "hint": hint,
                                      "status": resp.status_code})
                     return
+                acc: Dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0}
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -624,6 +951,9 @@ async def api_chat(request: Request):
                     try:
                         j = json.loads(data)
                     except Exception:
+                        continue
+                    if anthropic:
+                        await _pump_anthropic(j, queue, acc)
                         continue
                     ch = (j.get("choices") or [{}])[0]
                     delta = ch.get("delta") or {}
@@ -688,6 +1018,9 @@ async def api_chat(request: Request):
 CLAUDE_BIN: Optional[str] = None
 for _cand in (
     os.environ.get("CLAUDE_BIN"),
+    # 打包版自带的 claude（原生 exe，不需要 Node、不需要 PATH 里有东西）——优先用它
+    str(ROOT / "claude" / "claude.exe"),
+    str(ROOT / "claude.exe"),
     shutil.which("claude"),
     str(Path.home() / "AppData" / "Roaming" / "npm" / "claude.cmd"),
     str(Path.home() / ".local" / "bin" / "claude"),
@@ -695,6 +1028,35 @@ for _cand in (
     if _cand and Path(_cand).exists():
         CLAUDE_BIN = _cand
         break
+
+
+def _agent_env() -> Dict[str, str]:
+    """给 claude 子进程准备环境变量。
+
+    · config.json 里 agent 那一段**完全没配** → 什么都不动，让 claude 读它自己的
+      ~/.claude/settings.json（本机一直是这种，能用就别去打扰它）
+    · 配了地址/模型但没配单独的 Key → 用聊天那把 Key（同一个账号通常通用；
+      ⚠️ 少了这一步，打包给别人的机器上干活模式会因为没 Key 直接失败——踩过）
+    """
+    env = dict(os.environ)
+    ag = CONFIG["agent"]
+    if not (ag["base_url"] or ag["api_key"] or ag["model"]):
+        return env
+    if ag["base_url"]:
+        env["ANTHROPIC_BASE_URL"] = ag["base_url"]
+    key = ag["api_key"] or CONFIG["chat"]["api_key"]
+    if key:
+        env["ANTHROPIC_AUTH_TOKEN"] = key
+    if ag["model"]:
+        env["ANTHROPIC_MODEL"] = ag["model"]
+        # 它内部还会去要"小模型"（起标题/压缩上下文），不映射的话会去找一个中转站没有的模型名
+        for k in ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                  "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+                  "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+                  "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"):
+            env.setdefault(k, ag["model"])
+    env["DISABLE_AUTOUPDATER"] = "1"     # 自带的那份不让它自己去更新（更新会失败刷屏）
+    return env
 
 # 全自动模式：显式放行这一套。
 # ⚠️ 实测教训：Windows 上执行命令的工具名是 PowerShell（不是 Bash），
@@ -780,7 +1142,9 @@ def _kill_tree(pid: int) -> None:
 @app.get("/api/agent/available")
 async def agent_available():
     return {"ok": bool(CLAUDE_BIN), "bin": CLAUDE_BIN,
-            "hint": "" if CLAUDE_BIN else "找不到 claude 命令，装一下：npm install -g @anthropic-ai/claude-code"}
+            "hint": "" if CLAUDE_BIN else
+            "找不到 claude 程序：装一下（npm install -g @anthropic-ai/claude-code），"
+            "或把 claude.exe 放到程序目录的 claude\\ 文件夹里"}
 
 
 @app.post("/api/agent")
@@ -832,10 +1196,21 @@ async def api_agent(request: Request):
 
     # 起始目录只决定 claude 从哪儿起步，**不是沙箱**（它照样能访问别的盘/目录）。
     # 所以填错了不值得报错打断用户——直接用家目录兜底，日志里记一笔就行。
-    workspace = str(body.get("workspace") or "").strip() or str(Path.home())
+    workspace = (str(body.get("workspace") or "").strip()
+                 or CONFIG["agent"]["workspace"]
+                 or str(Path.home()))
     if not Path(workspace).is_dir():
-        print(f"[agent] 起始目录不存在({workspace})，改用家目录 {Path.home()}")
+        # 配好了起始目录但还没建出来 → 帮它建一个（别悄悄换回家目录：
+        # 实测踩过——目录不存在就退回家目录，结果文件全建到 C:\Users\你\ 底下去了）
+        with contextlib.suppress(Exception):
+            Path(workspace).mkdir(parents=True, exist_ok=True)
+    if not Path(workspace).is_dir():
+        print(f"[agent] 起始目录不存在也建不出来({workspace})，改用家目录 {Path.home()}")
         workspace = str(Path.home())
+    # 这个目录也共用同一份记忆（claude 按 cwd 找记忆，没见过的新目录默认空白——踩过）
+    _note = _link_memory_to_shared(CLAUDE_PROJECTS / _proj_slug(workspace))
+    if _note:
+        print(f"[agent] {_note}")
 
     session_id = (body.get("session_id") or "").strip()
     readonly = bool(body.get("readonly"))
@@ -854,6 +1229,13 @@ async def api_agent(request: Request):
         cmd += ["--disallowedTools", DENY_TOOLS]      # 只读：只许看，不许改
     else:
         cmd += ["--allowedTools", FULL_TOOLS]         # 全自动：这一套都放行
+        # 2026-09-13 补丁：网页端弹不出权限确认（不询问=直接拒），工作区之外的改动（如共享记忆目录）会被静默拒
+        cmd += ["--permission-mode", "bypassPermissions"]
+        try:
+            if MEM_DIR.is_dir():
+                cmd += ["--add-dir", str(MEM_DIR)]
+        except Exception:
+            pass
 
     print(f"[agent] cwd={workspace} resume={'yes' if session_id else 'no'} "
           f"readonly={readonly} prompt={prompt[:60]!r}")
@@ -861,7 +1243,7 @@ async def api_agent(request: Request):
     CREATE_NO_WINDOW = 0x08000000
     try:
         proc = subprocess.Popen(
-            cmd, cwd=workspace,
+            cmd, cwd=workspace, env=_agent_env(),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=CREATE_NO_WINDOW if sys.platform.startswith("win") else 0,
@@ -879,6 +1261,13 @@ async def api_agent(request: Request):
         proc.stdin.write(prompt)
         proc.stdin.close()
 
+    # 登记这次任务：网页断开（刷新/关标签）不会杀它，跑完的结果留 2 小时，
+    # 前端凭 run_id 取回（见 /api/agent/result）。
+    _prune_agent_runs()
+    run_id = secrets.token_hex(6)
+    AGENT_RUNS[run_id] = {"proc": proc, "events": [], "text": "", "done": False,
+                          "sid": session_id or "", "ts": time.time()}
+
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue(maxsize=2000)
     err_lines: List[str] = []
@@ -894,6 +1283,7 @@ async def api_agent(request: Request):
                 except Exception:
                     continue
                 for item in _translate_agent_event(ev):
+                    _remember_run_event(run_id, item)      # 存一份，刷新后能取回
                     loop.call_soon_threadsafe(queue.put_nowait, item)
         except Exception as e:
             loop.call_soon_threadsafe(queue.put_nowait,
@@ -912,6 +1302,10 @@ async def api_agent(request: Request):
 
     def _wait_done():
         rc = proc.wait()
+        run = AGENT_RUNS.get(run_id)
+        if run is not None:
+            run["done"] = True
+            run["rc"] = rc
         loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit", "code": rc})
         if rc != 0:
             tail = "\n".join(err_lines[-12:])
@@ -925,6 +1319,9 @@ async def api_agent(request: Request):
     threading.Thread(target=_wait_done, daemon=True).start()
 
     async def event_stream():
+        # 第一条就把 run_id 告诉前端：刷新回来后凭它把结果取回来／主动停止
+        yield 'data: ' + json.dumps({"type": "run", "run_id": run_id},
+                                    ensure_ascii=False) + "\n\n"
         try:
             while True:
                 try:
@@ -941,10 +1338,11 @@ async def api_agent(request: Request):
                     break
             yield 'data: {"type":"done"}\n\n'
         finally:
-            # 网页断开 / 用户点停止 → 把 claude 进程连子进程一起杀掉
+            # 网页断开（刷新 / 关标签 / 断网）**不杀任务**：它在后台继续跑，结果留在
+            # AGENT_RUNS 里，前端刷新回来凭 run_id 取回。
+            # 真正要停 = 用户点停止按钮 → 前端先调 /api/agent/stop，那才杀进程。
             if proc.poll() is None:
-                print("[agent] 收到中断，杀掉 claude 进程", proc.pid)
-                await asyncio.to_thread(_kill_tree, proc.pid)
+                print(f"[agent] 网页断开了，任务继续在后台跑（run={run_id}，要停请点停止按钮）")
 
     return StreamingResponse(
         event_stream(),
@@ -952,6 +1350,244 @@ async def api_agent(request: Request):
         headers={"Cache-Control": "no-cache, no-transform",
                  "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+# ==========================================================================
+#  在跑的 agent 任务：刷新页面 ≠ 中断
+#  run_id 由 /api/agent 的第一条事件下发；跑完的结果在这里留 2 小时，
+#  前端刷新回来凭 run_id 把最终回答填回气泡（也可以直接追问，会话没断）。
+# ==========================================================================
+AGENT_RUNS: Dict[str, Dict[str, Any]] = {}
+AGENT_RUN_TTL = 2 * 3600
+
+
+def _remember_run_event(run_id: str, item: Dict[str, Any]) -> None:
+    """每个事件在内存里留一份（最近 4000 条 + 最终回答）"""
+    run = AGENT_RUNS.get(run_id)
+    if run is None:
+        return
+    run["events"].append(item)
+    if len(run["events"]) > 4000:
+        del run["events"][:-4000]
+    t = item.get("type")
+    if t == "session":
+        run["sid"] = item.get("session_id") or run["sid"]
+    elif t == "text":
+        run["text"] = (run["text"] + (item.get("text") or ""))[-40000:]
+    elif t == "agent_usage":
+        run["usage"] = {"input_tokens": item.get("input_tokens"),
+                        "output_tokens": item.get("output_tokens")}
+        if item.get("result"):
+            run["text"] = item["result"]
+
+
+def _prune_agent_runs() -> None:
+    now = time.time()
+    for k in [k for k, v in AGENT_RUNS.items() if now - v.get("ts", 0) > AGENT_RUN_TTL]:
+        AGENT_RUNS.pop(k, None)
+
+
+@app.get("/api/agent/result")
+async def api_agent_result(run_id: str):
+    """凭 run_id 看一个 agent 任务：还在跑吗？跑完没有？最终回答是什么？"""
+    run = AGENT_RUNS.get(run_id)
+    if not run:
+        return {"ok": False, "message": "没有这个任务（可能跑完超过 2 小时，或服务重启过）"}
+    return {"ok": True, "done": bool(run.get("done")), "text": run.get("text") or "",
+            "session_id": run.get("sid") or "", "usage": run.get("usage"),
+            "killed": bool(run.get("killed")), "age": int(time.time() - run.get("ts", 0))}
+
+
+@app.post("/api/agent/stop")
+async def api_agent_stop(request: Request):
+    """真正的中断：前端点停止按钮时调这里（刷新页面**不**算停止）"""
+    body: Dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        body = await request.json()
+    rid = str(body.get("run_id") or "")
+    run = AGENT_RUNS.get(rid)
+    if not run:
+        return {"ok": False, "message": "没找到这个任务（可能已经跑完了）"}
+    proc = run.get("proc")
+    if proc is not None and proc.poll() is None:
+        await asyncio.to_thread(_kill_tree, proc.pid)
+        run["killed"] = True
+        print(f"[agent] 用户点了停止，已杀掉 run={rid}")
+    return {"ok": True}
+
+
+# ==========================================================================
+#  更新干活模式的「大脑」：把自带的 claude.exe 换成最新版
+#
+#  为什么不用 claude 自带的 `claude update`：它去 downloads.claude.ai 拿版本，
+#  国内直连被拒（2026-09-13 实测 ECONNREFUSED，重试 3 次失败）。
+#  这里改走国内 npm 镜像（registry.npmmirror.com → cdn.npmmirror.com，
+#  实测 8 MB/s，98MB 的包十几秒下完），下完当场验版本、验能跑，再替换。
+# ==========================================================================
+NPMMIRROR = "https://registry.npmmirror.com"
+CLAUDE_PKG = "@anthropic-ai/claude-code"
+# 原生二进制是单独的"平台包"（npm 主包只有 0.2MB，安装时再去拉对应平台的那个）
+CLAUDE_PLATFORM_PKG = {
+    "win32": {"x86_64": "claude-code-win32-x64", "arm64": "claude-code-win32-arm64"},
+    "darwin": {"x86_64": "claude-code-darwin-x64", "arm64": "claude-code-darwin-arm64"},
+    "linux": {"x86_64": "claude-code-linux-x64", "arm64": "claude-code-linux-arm64"},
+}
+
+
+def _platform_pkg() -> str:
+    import platform as _pf
+    mach = {"AMD64": "x86_64", "x86_64": "x86_64", "ARM64": "arm64", "aarch64": "arm64"}.get(_pf.machine(), "")
+    return CLAUDE_PLATFORM_PKG.get(sys.platform.split("-")[0], {}).get(mach, "")
+
+
+def _ver_tuple(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:4]) or (0,)
+
+
+def _claude_version_of(exe: str) -> str:
+    """跑一下 `exe --version` 拿 x.y.z（拿不到就返回空串）"""
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90,
+                           creationflags=0x08000000 if sys.platform.startswith("win") else 0)
+        m = re.search(r"(\d+\.\d+\.\d+)", (r.stdout or "") + (r.stderr or ""))
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def _claude_busy() -> bool:
+    """自带那个 claude.exe 是不是正在干活（正在跑就替换不了文件）"""
+    if not CLAUDE_BIN or not sys.platform.startswith("win"):
+        return False
+    esc = str(CLAUDE_BIN).replace("'", "''")
+    ps = ("Get-Process claude -ErrorAction SilentlyContinue | "
+          f"Where-Object {{ $_.Path -eq '{esc}' }} | Measure-Object | "
+          "Select-Object -ExpandProperty Count")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=40,
+                           creationflags=0x08000000)
+        return int((r.stdout or "0").strip() or 0) > 0
+    except Exception:
+        return True          # 查不出来就当作在忙：宁可让她等一下，也别把 exe 换坏
+
+
+async def _claude_latest() -> str:
+    """问国内镜像最新版是多少"""
+    r = await app.state.client.get(f"{NPMMIRROR}/{CLAUDE_PKG}/latest", timeout=40.0)
+    r.raise_for_status()
+    return str((r.json() or {}).get("version") or "")
+
+
+@app.get("/api/claude-update")
+async def api_claude_update_check():
+    """查有没有新版 → {current, latest, has_update}"""
+    current = await asyncio.to_thread(_claude_version_of, CLAUDE_BIN) if CLAUDE_BIN else ""
+    latest, err = "", ""
+    try:
+        latest = await _claude_latest()
+    except Exception as e:
+        err = f"查不到最新版（{type(e).__name__}）——断网的话连上再试"
+    return {"ok": True, "current": current, "latest": latest, "bin": CLAUDE_BIN,
+            "has_update": bool(current and latest and _ver_tuple(latest) > _ver_tuple(current)),
+            "message": err}
+
+
+@app.post("/api/claude-update")
+async def api_claude_update_do():
+    """下载新版并替换自带的 claude.exe（旧版改名留档 .bak-<版本>，出问题能换回来）"""
+    if not CLAUDE_BIN:
+        return JSONResponse({"ok": False, "message": "没有找到 claude 程序，没法更新"}, status_code=400)
+    if not str(CLAUDE_BIN).lower().endswith(".exe"):
+        # npm 装的是个 claude.cmd 外壳，用这种方式替换会把那个安装弄坏 → 让它走 npm
+        return JSONResponse({"ok": False, "message":
+                             "当前用的是 npm 安装的 claude（claude.cmd），请用 npm 更新："
+                             "npm install -g @anthropic-ai/claude-code@latest"}, status_code=400)
+    if await asyncio.to_thread(_claude_busy):
+        return JSONResponse({"ok": False, "message": "它正在干活，等这次跑完再更新（或先按 Esc 中断）"},
+                            status_code=409)
+    pkg = _platform_pkg()
+    if not pkg:
+        return JSONResponse({"ok": False, "message": f"不认识这个平台：{sys.platform}，没法自动更新"}, status_code=400)
+    try:
+        latest = await _claude_latest()
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": f"连不上国内镜像：{type(e).__name__}"}, status_code=502)
+    if not latest:
+        return JSONResponse({"ok": False, "message": "镜像没给出最新版本号"}, status_code=502)
+    current = await asyncio.to_thread(_claude_version_of, CLAUDE_BIN)
+    if current and _ver_tuple(latest) <= _ver_tuple(current):
+        return {"ok": True, "updated": False, "from": current, "to": current,
+                "message": f"已经是最新版（{current}）"}
+
+    pkg_full = f"@anthropic-ai/{pkg}"                    # @anthropic-ai/claude-code-win32-x64
+    url = f"{NPMMIRROR}/{pkg_full}/-/{pkg}-{latest}.tgz"
+    tmpdir = DATA_DIR / "update"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    tgz = tmpdir / f"{pkg}-{latest}.tgz"
+    print(f"[update] 下载 claude {latest}：{url}")
+    try:
+        # follow_redirects：npmmirror 会 302 到 cdn.npmmirror.com，不跟就会直接报 302
+        async with app.state.client.stream(
+                "GET", url, follow_redirects=True,
+                timeout=httpx.Timeout(connect=20.0, read=900.0, write=60.0, pool=20.0)) as resp:
+            resp.raise_for_status()
+            with open(tgz, "wb") as f:
+                async for chunk in resp.aiter_bytes(1 << 20):
+                    f.write(chunk)
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            tgz.unlink()
+        return JSONResponse({"ok": False, "message": f"下载失败：{type(e).__name__} {e}"}, status_code=502)
+
+    import tarfile
+    new_exe = tmpdir / ("claude-new.exe" if sys.platform.startswith("win") else "claude-new")
+    try:
+        with tarfile.open(tgz, "r:gz") as tf:
+            member = None
+            for m in tf.getmembers():
+                if m.name.replace("\\", "/").lower() in (
+                        "package/claude.exe", "package/bin/claude.exe",
+                        "package/claude", "package/bin/claude"):
+                    member = m
+                    break
+            if member is None:
+                return JSONResponse({"ok": False, "message": "下载包里没找到 claude 可执行文件"}, status_code=502)
+            src = tf.extractfile(member)
+            with open(new_exe, "wb") as f:
+                shutil.copyfileobj(src, f)
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": f"解包失败：{type(e).__name__} {e}"}, status_code=500)
+
+    got = await asyncio.to_thread(_claude_version_of, str(new_exe))
+    if got != latest:            # 验版本 + 验它真能跑起来，不合格就不换
+        with contextlib.suppress(Exception):
+            new_exe.unlink()
+        return JSONResponse({"ok": False, "message":
+                             f"下下来的文件不对（期望 {latest}，实际 {got or '跑不起来'}），已放弃替换"},
+                            status_code=502)
+
+    target = Path(CLAUDE_BIN)
+    bak = Path(str(target) + f".bak-{current or 'old'}")
+    try:
+        if current:
+            with contextlib.suppress(Exception):
+                os.replace(str(target), str(bak))      # 改名留档，不占额外空间
+        os.replace(str(new_exe), str(target))          # 同盘替换，原子操作
+    except Exception as e:
+        with contextlib.suppress(Exception):           # 尽力还原，别把 claude.exe 弄没了
+            if bak.exists() and not target.exists():
+                os.replace(str(bak), str(target))
+        return JSONResponse({"ok": False, "message":
+                             f"替换失败（多半是旧进程还占着文件，稍后再试）：{type(e).__name__} {e}"},
+                            status_code=500)
+
+    with contextlib.suppress(Exception):
+        tgz.unlink()
+    print(f"[update] claude {current} → {latest} 完成，旧版留在 {bak.name}")
+    return {"ok": True, "updated": True, "from": current, "to": latest,
+            "message": f"更新完成：{current} → {latest}（下一次干活就用新版，旧版备份在 app\\claude\\）"}
 
 
 # ==========================================================================
@@ -998,9 +1634,12 @@ def _read_text_file(p: Path, limit: int = 200000) -> str:
 def _extract_pdf(p: Path) -> tuple[str, list[str], str]:
     """返回 (正文, 渲染出的图片名列表, 说明)"""
     try:
-        import fitz  # PyMuPDF
+        import pymupdf as fitz  # PyMuPDF（新版改名叫 pymupdf 了，老写法 fitz 仍然能用）
     except ImportError:
-        return "", [], "缺 PyMuPDF：pip install pymupdf"
+        try:
+            import fitz
+        except ImportError:
+            return "", [], "缺 PyMuPDF：pip install pymupdf"
     doc = fitz.open(str(p))
     pages = doc.page_count
     text = "\n".join((doc[i].get_text() or "") for i in range(pages))
@@ -1070,6 +1709,9 @@ def _extract_pptx(p: Path) -> tuple[str, str]:
 
 
 def _asr_key() -> str:
+    k = (CONFIG.get("asr_key") or "").strip()          # 网页设置里填的（打包版走这条）
+    if k:
+        return k
     k = (os.environ.get("SILICONFLOW_API_KEY") or "").strip()
     if k:
         return k
@@ -1115,6 +1757,9 @@ def _ffmpeg() -> str:
     found = shutil.which("ffmpeg") or ""
     if not found:
         pats = [
+            # 打包版可以往程序目录的 bin\ 里丢一个 ffmpeg.exe（体积太大没跟着打包）
+            str(ROOT / "bin" / "ffmpeg.exe"),
+            str(ROOT / "ffmpeg.exe"),
             str(Path.home() / "AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg*/**/bin/ffmpeg.exe"),
             "C:/ffmpeg/bin/ffmpeg.exe",
             "C:/Program Files/ffmpeg/bin/ffmpeg.exe",
@@ -1375,8 +2020,63 @@ async def api_attach_text(request: Request):
 #  记忆本来就是共享的（各项目目录的 memory 都是同一份的目录链接），
 #  这里只是把它显示出来、并让会话可以互相接管。
 # ==========================================================================
-MEM_DIR = Path.home() / ".claude" / "projects" / "C--WINDOWS-system32" / "memory"
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+# 长期记忆目录：config.json 里配了 memory_dir 就用它（打包版指到自己的数据目录里），
+# 否则用本机终端那一套（终端和网页共用同一份记忆）
+MEM_DIR = (Path(CONFIG["memory_dir"]) if CONFIG["memory_dir"]
+           else CLAUDE_PROJECTS / "C--WINDOWS-system32" / "memory")
+with contextlib.suppress(Exception):
+    MEM_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# --------------------------------------------------------------------------
+#  工作目录 ≠ 失忆：claude 是按「工作目录」找记忆的
+#  （~/.claude/projects/<目录名转义>/memory/），换个没用过的目录就是一份空白记忆。
+#  这里把每个项目目录的记忆都接到共享记忆上——用户在任何目录里干活都认识他。
+# --------------------------------------------------------------------------
+def _proj_slug(cwd) -> str:
+    """claude 的项目目录名：非字母数字一律换成 -（实测 E:\\git练习 → E--git--）"""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+
+
+def _link_memory_to_shared(proj: Path) -> str:
+    """把 proj/memory 接到共享记忆；幂等，返回给日志的一句话（没事发生就返回空串）"""
+    mem = proj / "memory"
+    try:
+        if mem.is_dir() and mem.resolve() == MEM_DIR.resolve():
+            return ""                       # 已经是共享那一份
+        if mem.is_dir() and any(mem.iterdir()):
+            # 里面已经有独立记忆 → **一律不动它，只记一笔日志**。
+            # ⚠️ 这里原来做的是"把内容并进共享目录、原目录改名留档、再换成链接"，
+            #    2026-09-13 实测踩了大坑：当 MEM_DIR 指向**别的位置**（打包版/测试实例配了
+            #    自己的 memory_dir）时，它会把用户真正的记忆整个搬走——主人的记忆目录被挪到
+            #    %LOCALAPPDATA%\Jingyu\memory 下面、原位只剩链接，清理那个测试目录就等于删记忆。
+            #    原则改死：**只给空的补链接，绝不搬有东西的**。
+            return f"跳过 {proj.name}：里面已有记忆，不搬动它"
+        elif mem.exists():
+            mem.rmdir()                      # 空目录：直接让位
+        proj.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(mem), str(MEM_DIR)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return f"接记忆失败({proj.name})：{(r.stderr or r.stdout).strip()}"
+        return f"已把 {proj.name} 的记忆接上共享记忆"
+    except Exception as e:
+        return f"接记忆出错({proj.name})：{e}"
+
+
+def _sweep_memory_links() -> None:
+    """启动时扫一遍：已有的项目目录全部接上共享记忆（「新目录失忆」的坑就此补上）"""
+    if not MEM_DIR.is_dir() or not CLAUDE_PROJECTS.is_dir():
+        return
+    for proj in CLAUDE_PROJECTS.iterdir():
+        if proj.is_dir():
+            msg = _link_memory_to_shared(proj)
+            if msg:
+                print(f"[memory] {msg}")
+
+
+_sweep_memory_links()
 
 
 def _memory_text(max_chars: int = 6000) -> str:

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>deepseek 本地工作台</title>
-<meta name="description" content="本地 AI 聊天工作台：CHAT 接 DeepSeek，AGENT 直接驱动 Claude Code 干活；附件全在本地解析。">
+<title>本地工作台</title>
+<meta name="description" content="本地 AI 聊天工作台：聊天接大模型，干活模式直接驱动 Claude Code 动你的电脑；附件全在本地解析。">
 <meta name="theme-color" content="#0a0c11">
 <link rel="icon" href="/static/app.ico">
 <link rel="manifest" href="/static/manifest.webmanifest">
@@ -32,7 +32,7 @@
     <div class="side-top">
       <div class="brand">
         <span class="brand-logo"></span>
-        <span class="brand-name">deepseek</span>
+        <span class="brand-name" id="brandName">deepseek</span>
         <span class="brand-sub" id="brandSub">本地工作台</span>
       </div>
       <button class="new-btn" id="btnNew"><span>＋</span> 新建会话</button>
@@ -45,9 +45,28 @@
     <nav class="conv-list" id="convList"></nav>
 
     <div class="side-foot">
-      <button class="bal" id="btnBalance" title="点一下刷新余额">
-        <span class="dot" id="balDot"></span><span id="balText">余额读取中…</span>
+      <button class="bal" id="btnBalance" title="点一下看余额明细">
+        <span class="balrow"><span class="dot" id="balDot"></span><span id="balText">余额读取中…</span><span class="ballbl" id="balLbl"></span><span class="balpct" id="balPct"></span></span>
+        <span class="balbar hidden" id="balBar"><i id="balFill"></i></span>
       </button>
+      <div class="balpop hidden" id="balPop">
+        <div class="bp-head">
+          <span class="bp-label">余额</span>
+          <span class="bp-badge" id="balPopBadge">—</span>
+        </div>
+        <div class="bp-num"><span class="bp-cur" id="balPopCur">¥</span><span id="balPopNum">—</span></div>
+        <span class="balbar lg" id="balBar2"><i id="balFill2"></i></span>
+        <div class="bp-rows">
+          <div class="bp-row"><span>充值基准</span><b id="balPopBase">—</b></div>
+          <div class="bp-row"><span>起算</span><b id="balPopWhen">—</b></div>
+          <div class="bp-row"><span>本轮已用</span><b id="balPopUsed">—</b></div>
+        </div>
+        <div class="bp-foot">
+          <button class="bp-btn" id="balPopRefresh">刷新</button>
+          <button class="bp-btn" id="balPopReset">以当前余额为新基准</button>
+          <div class="bp-note" id="balPopNote">每次充值后自动回到 100%</div>
+        </div>
+      </div>
       <div class="foot-row">
         <button class="icon-btn" id="btnTheme" title="切换深/浅色">🌙</button>
         <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
@@ -136,7 +155,12 @@
       <section class="sec">
         <h4><span class="ico">◈</span>模型与接口</h4>
         <div class="grid2">
-          <label class="fld"><span>模型</span><select id="setModel"></select></label>
+          <label class="fld"><span>接口协议</span>
+            <select id="setProtocol">
+              <option value="openai">OpenAI 兼容（/chat/completions）</option>
+              <option value="anthropic">Anthropic 兼容（/v1/messages）</option>
+            </select>
+          </label>
           <label class="fld"><span>主题</span>
             <select id="setTheme">
               <option value="dark">深色</option>
@@ -144,8 +168,12 @@
             </select>
           </label>
         </div>
+        <label class="fld"><span>模型 <em>可以直接输入中转站给的模型名</em></span>
+          <input type="text" id="setModel" list="modelList" spellcheck="false" placeholder="deepseek-flash">
+          <datalist id="modelList"></datalist>
+        </label>
         <label class="fld"><span>API Key <em>存在后端 config.json，不回显明文</em></span>
-          <div class="row"><input type="password" id="setKey" placeholder="留空 = 自动复用 Claude Code 的 Key"><button class="mini" id="setKeyEye">👁</button></div>
+          <div class="row"><input type="password" id="setKey" placeholder="留空 = 不改（本机还会自动复用 Claude Code 的 Key）"><button class="mini" id="setKeyEye">👁</button></div>
           <span class="note" id="keyNote"></span>
         </label>
         <label class="fld"><span>Base URL</span><input type="text" id="setBase" spellcheck="false" placeholder="https://api.deepseek.com"></label>
@@ -161,10 +189,22 @@
       </section>
 
       <section class="sec">
-        <h4><span class="ico">🛠</span>干活模式</h4>
-        <label class="fld"><span>起始目录 <em>只是落脚点，不是沙箱</em></span><input type="text" id="setWorkspace" spellcheck="false" placeholder="E:\"></label>
+        <h4><span class="ico">🛠</span>干活模式 <em class="h4-note">驱动 Claude Code，能真的动你的电脑</em></h4>
+        <div class="grid2">
+          <label class="fld"><span>接口地址 <em>Anthropic 兼容</em></span><input type="text" id="setAgentBase" spellcheck="false" placeholder="https://api.deepseek.com/anthropic"></label>
+          <label class="fld"><span>模型</span><input type="text" id="setAgentModel" spellcheck="false" placeholder="deepseek-flash[1M]"></label>
+        </div>
+        <label class="fld"><span>干活 Key <em>留空 = 用聊天那把；再留空则用 Claude Code 自己的配置</em></span>
+          <div class="row"><input type="password" id="setAgentKey" placeholder="留空不改"><button class="mini" id="setAgentEye">👁</button></div>
+        </label>
+        <div class="row" style="margin:-2px 0 12px;flex-wrap:wrap">
+          <button class="mini" id="btnTestChat">测一下聊天</button>
+          <button class="mini" id="btnTestAgent">测一下干活</button>
+          <button class="mini" id="btnClaudeUpdate" title="从国内镜像拉最新版 claude（干活模式的大脑）">检查 claude 更新</button>
+          <span class="note" id="testNote"></span>
+        </div>
         <div class="chk-row">
-          <label class="chk"><input type="checkbox" id="setReadonly"> 只读模式（只能看不能改）</label>
+          <label class="chk"><input type="checkbox" id="setReadonly"> 只读模式（不勾 = 全自动：可改文件、可跑命令）</label>
           <label class="chk"><input type="checkbox" id="setLineNo"> 代码块显示行号</label>
           <label class="chk"><input type="checkbox" id="setReason"> 显示思考过程</label>
         </div>
@@ -232,7 +272,11 @@
       <button class="icon-btn" id="gitClose">✕</button></div>
     <div class="modal-body">
       <div class="row" style="margin-bottom:10px">
-        <span class="note" style="flex:0 0 auto">工作目录</span>
+        <span class="note" style="flex:0 0 auto">Git 用的目录</span>
+        <span class="note" id="gitWsNow" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">E:\</span>
+        <button class="mini" id="gitWsEdit">改</button>
+      </div>
+      <div class="row hidden" id="gitWsRow" style="margin-bottom:10px">
         <input type="text" id="gitWs" spellcheck="false" placeholder="E:\某个项目文件夹"
                style="flex:1;background:var(--elev);border:1px solid var(--border);border-radius:9px;padding:6px 10px;outline:none;font-size:12.5px">
         <button class="mini" id="gitWsSet">用这个</button>
@@ -275,6 +319,63 @@
       <div class="ob-tip">⌘ <b>Ctrl+K</b> 是万能入口：搜索会话、<b>接管你在终端里的对话</b>、跑斜杠命令</div>
     </div>
     <div class="ob-foot"><button class="mini" id="obClose">知道了，开始用</button></div>
+  </div>
+</div>
+
+<!-- ══════════════ 接口配置向导（没配 API 时自动弹；设置里也能再打开） ══════════════ -->
+<div class="overlay hidden" id="setup">
+  <div class="modal set">
+    <div class="modal-head"><b>先配一下接口</b><button class="icon-btn" id="suClose">✕</button></div>
+    <div class="modal-body">
+      <p class="note" style="margin:0 0 12px">
+        不知道填什么就直接点下面的<b>「DeepSeek 官方」</b>：去 platform.deepseek.com 建一个 key 粘进来就行。
+        用中转站的话点另外两个，照着它给的地址和模型名填。
+      </p>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:6px">
+        <button class="mini" id="tplDeepseek">DeepSeek 官方</button>
+        <button class="mini" id="tplOpenai">OpenAI 兼容中转</button>
+        <button class="mini" id="tplAnthropic">Anthropic 兼容中转</button>
+      </div>
+
+      <section class="sec">
+        <h4><span class="ico">◈</span>聊天（必填）</h4>
+        <div class="grid2">
+          <label class="fld"><span>协议</span>
+            <select id="suProtocol">
+              <option value="openai">OpenAI 兼容</option>
+              <option value="anthropic">Anthropic 兼容</option>
+            </select>
+          </label>
+          <label class="fld"><span>模型</span><input type="text" id="suModel" spellcheck="false" placeholder="deepseek-flash"></label>
+        </div>
+        <label class="fld"><span>接口地址</span><input type="text" id="suBase" spellcheck="false" placeholder="https://api.deepseek.com"></label>
+        <label class="fld"><span>API Key</span><input type="password" id="suKey" spellcheck="false" placeholder="sk-..."></label>
+      </section>
+
+      <section class="sec">
+        <h4><span class="ico">🛠</span>干活模式 <em class="h4-note">Claude Code；不用可以跳过</em></h4>
+        <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="suSame" checked> 干活和聊天用同一个服务（DeepSeek 官方这样填就行）</label>
+        <div id="suAgentBox" class="hidden">
+          <label class="fld"><span>接口地址 <em>Anthropic 兼容</em></span><input type="text" id="suAgentBase" spellcheck="false" placeholder="https://api.deepseek.com/anthropic"></label>
+          <div class="grid2">
+            <label class="fld"><span>API Key</span><input type="password" id="suAgentKey" spellcheck="false" placeholder="留空 = 用聊天那把"></label>
+            <label class="fld"><span>模型</span><input type="text" id="suAgentModel" spellcheck="false" placeholder="deepseek-flash[1M]"></label>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec">
+        <h4><span class="ico">◆</span>语音转文字 <em class="h4-note">可选</em></h4>
+        <label class="fld"><span>硅基流动 Key <em>不填就不支持语音消息，其他功能不受影响</em></span><input type="password" id="suAsr" spellcheck="false" placeholder="留空 = 跳过"></label>
+      </section>
+
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:4px">
+        <button class="mini" id="suTestChat">测一下聊天</button>
+        <button class="mini" id="suTestAgent">测一下干活</button>
+        <button class="mini primary" id="suSave">保存并开始用</button>
+        <span class="note" id="suNote"></span>
+      </div>
+    </div>
   </div>
 </div>
 

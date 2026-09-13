@@ -262,18 +262,111 @@ button { cursor: pointer; border: 0; background: none; }
 }
 .side-mask.open { opacity: 1; pointer-events: auto; }
 
-.side-foot { border-top: 1px solid var(--border-soft); padding: 10px var(--s2);
+.side-foot { position: relative; border-top: 1px solid var(--border-soft); padding: 10px var(--s2);
   display: flex; align-items: center; gap: 6px; }
-.bal { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+.bal { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 5px;
   padding: 6px 8px; border-radius: var(--r-sm); color: var(--dim); font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums; transition: background var(--t), color var(--t); }
+.balrow { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .bal:hover { background: var(--hover); color: var(--text); }
 .bal .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto;
   transition: background var(--t), box-shadow var(--t); }
-.bal .dot.ok { background: var(--green); box-shadow: 0 0 9px color-mix(in srgb, var(--green) 55%, transparent); }
+/* 健康时跟进度条同色（蓝），掉到低了才变琥珀/红 —— 三者一个色系才像一体的 */
+.bal .dot.ok { background: var(--accent); box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 55%, transparent); }
 .bal .dot.low { background: var(--amber); box-shadow: 0 0 9px color-mix(in srgb, var(--amber) 45%, transparent); }
 .bal .dot.bad { background: var(--red); box-shadow: 0 0 9px color-mix(in srgb, var(--red) 45%, transparent); }
-.bal span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bal #balText { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 百分比靠右、跟进度条同色（颜色由 .lv-* 决定）。
+   前面配一个小小的"剩余"，一个孤零零的数字太单调 */
+.ballbl { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--faint); letter-spacing: .3px; }
+.balpct { flex: 0 0 auto; font-size: 14px; font-weight: 600; letter-spacing: -.2px; }
+.balpct.lv-ok { color: var(--accent); }
+.balpct.lv-mid { color: var(--amber); }
+.balpct.lv-low { color: var(--red); }
+
+/* 左键点余额弹出来的明细卡片（字体排印照着"数字要好看"来做：
+   大数字用等宽字体 + 收紧字距 + 顶部高光，行值右对齐等宽，看着齐） */
+.balpop {
+  position: absolute; bottom: calc(100% + 9px); left: 6px; width: 248px; z-index: 45;
+  background: var(--elev); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--sh-3), var(--hl); padding: 13px 14px 11px;
+  animation: bpIn 190ms var(--ease);
+}
+@keyframes bpIn { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+.balpop::after {                    /* 指向下面余额按钮的小尖角 */
+  content: ''; position: absolute; left: 18px; bottom: -5px; width: 9px; height: 9px;
+  background: var(--elev); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.bp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.bp-label { font-size: var(--fs-xs); color: var(--faint); letter-spacing: .8px; }
+.bp-badge { font-size: var(--fs-xs); font-weight: 600; padding: 1.5px 8px; border-radius: 99px;
+  background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
+.bp-badge.lv-ok { background: var(--accent-soft); color: var(--accent); }
+.bp-badge.lv-mid { background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
+.bp-badge.lv-low { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.bp-num { display: flex; align-items: baseline; gap: 3px; margin-bottom: 10px;
+  font-family: var(--mono); font-size: 21px; font-weight: 500; color: var(--text-strong);
+  letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+/* ⚠️ 别用 .cur —— 那是流式光标的方块类（蓝色 7px 方块），撞过一次 */
+.bp-num .bp-cur { font-size: 13px; color: var(--dim); }
+.balbar.lg { height: 9px; margin-bottom: 12px; }
+.bp-rows { display: flex; flex-direction: column; gap: 7px; }
+.bp-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-size: var(--fs-sm); }
+.bp-row span { color: var(--faint); }
+.bp-row b { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 500; color: var(--text);
+  font-variant-numeric: tabular-nums; letter-spacing: -.1px; }
+.bp-foot { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.bp-btn { font-size: var(--fs-xs); color: var(--dim); padding: 3.5px 9px; border-radius: var(--r-xs);
+  border: 1px solid var(--border); background: var(--hover);
+  transition: color var(--t), border-color var(--t), background var(--t); }
+.bp-btn:hover { color: var(--accent); border-color: var(--accent-line); }
+.bp-note { flex: 1 1 100%; font-size: 11px; color: var(--faint); line-height: 1.5; }
+
+/* 余额进度条：基准 = 上次充值那一刻的余额（充值前剩的 + 这次充的 = 满格），充一次重新充满。
+   默认**蓝色**（跟界面主色一致），只有余额掉到低了才转琥珀/红当警告。
+   颜色走 --balc 变量，深浅主题自动跟着变 */
+.balbar {
+  /* display:block 必须写：它在侧栏里是 flex 子项会被自动块级化，但在余额卡片里
+     是普通 span，行内元素的高度/宽度不生效 → 整条看不见（踩过） */
+  display: block;
+  /* 槽底用主题令牌（浅色主题下白 7% 会看不见，踩过） */
+  height: 7px; border-radius: 99px; overflow: hidden; background: var(--border);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18);
+}
+.balbar > i {
+  position: relative; display: block; height: 100%; width: 0; overflow: hidden;
+  border-radius: 99px;
+  background-image: linear-gradient(90deg,
+    color-mix(in srgb, var(--balc, var(--accent)) 58%, transparent),
+    var(--balc, var(--accent)) 62%,
+    color-mix(in srgb, var(--balc, var(--accent)) 82%, #fff));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3),
+              0 0 12px -2px color-mix(in srgb, var(--balc, var(--accent)) 65%, transparent);
+  transition: width .55s cubic-bezier(.22, .8, .24, 1), background-color var(--t);
+}
+/* 气泡流动：两层大小不一的圆点横向漂移；位移正好等于平铺宽度 → 无缝循环，看不出接缝 */
+.balbar > i::after {
+  content: ''; position: absolute; inset: 0;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, .55) 0 1.6px, transparent 2.4px),
+    radial-gradient(circle, rgba(255, 255, 255, .3) 0 1px, transparent 1.8px);
+  background-size: 24px 100%, 15px 100%;
+  background-position: 0 35%, 7px 72%;
+  background-repeat: repeat-x;
+  animation: balBubble 3.2s linear infinite;
+}
+@keyframes balBubble {
+  from { background-position: 0 35%, 7px 72%; }
+  to { background-position: 24px 35%, 22px 72%; }
+}
+.balbar.lv-ok { --balc: var(--accent); }
+.balbar.lv-mid { --balc: var(--amber); }
+.balbar.lv-low { --balc: var(--red); }
+/* 余额还在读、或者中转站没有余额接口时，进度条不出现 */
+.balbar.hidden { display: none; }
 .foot-row { display: flex; gap: 2px; }
 
 .icon-btn {
@@ -785,6 +878,10 @@ pre code.hljs { background: transparent !important; padding: 0 !important; }
   padding: 7px 13px; font-size: var(--fs-sm); color: var(--dim); box-shadow: var(--hl);
   transition: all var(--t); }
 .mini:hover { color: var(--accent); border-color: var(--accent-line); }
+/* 主按钮（配置向导里的"保存并开始用"） */
+.mini.primary { background: var(--accent); border-color: var(--accent); color: #06110c;
+  font-weight: 620; padding: 7px 15px; }
+.mini.primary:hover { color: #06110c; border-color: var(--accent); filter: brightness(1.1); }
 .chk-row { display: flex; flex-wrap: wrap; gap: 14px; }
 .chk { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm);
   color: var(--dim); cursor: pointer; }
