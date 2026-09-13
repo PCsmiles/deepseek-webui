@@ -111,7 +111,7 @@ if os.environ.get("DSUI_SILENT") == "1":
         sys.stdout = _log
         sys.stderr = _log
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_BRAND = "deepseek"                  # 界面上的名字（打包给别人的那份用 config.json 改成"鲸语"）
 DEFAULT_PRETTY_HOST = "deepseek.localhost"  # 好看网址（*.localhost 才是浏览器眼里的"安全上下文"）
