@@ -26,6 +26,20 @@
 界面照 claudecodeui / Open WebUI 那类成熟产品的路子做的：左侧会话列表、
 右对齐用户气泡、彩色工具卡片、圆角卡片、深/浅两套主题。
 
+### 长这样
+
+<!-- 演示动图：录好存成 docs/img/demo.gif 之后，把下面这一行取消注释即可
+![演示](docs/img/demo.gif)
+-->
+
+| 聊天（CHAT，接 DeepSeek） | 干活（AGENT，驱动 Claude Code） |
+|---|---|
+| ![聊天](docs/img/main.png) | ![干活](docs/img/agent.png) |
+| **余额明细**（左键点侧栏余额，基准=上次充值） | **用量与花费**（按天/按模型聚合） |
+| ![余额明细](docs/img/balance.png) | ![用量](docs/img/usage.png) |
+
+> 截图里的对话是演示数据；图片也都是本地渲染的（代码高亮 / 表格 / 公式 / 工具卡片按类型上色）。
+
 ---
 
 ## 一、怎么启动 / 怎么停
